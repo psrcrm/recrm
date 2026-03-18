@@ -1,0 +1,1159 @@
+import { useState, useEffect, useCallback } from "react";
+
+// ============================================================
+// GOOGLE SHEETS SYNC LAYER
+// ============================================================
+// HOW TO SET UP (one-time, 5 minutes):
+// 1. Go to https://sheets.google.com → create a new sheet named "RE_CRM"
+// 2. Go to Extensions → Apps Script → paste the Apps Script code from the SETUP tab
+// 3. Click Deploy → New Deployment → Web App → Execute as: Me → Who has access: Anyone
+// 4. Copy the Web App URL and paste it in the Settings tab of this CRM
+// ============================================================
+
+const DB_KEY = "re_crm_v2";
+const SCRIPT_URL_KEY = "re_crm_script_url";
+
+const DEFAULT_DB = {
+  customers: [],
+  followups: [],
+  projects: [
+    { id: "p1", name: "Green Valley Plots", type: "Plot" },
+    { id: "p2", name: "Sky Heights Apartments", type: "Flat" },
+    { id: "p3", name: "Royal Villas", type: "Villa" },
+    { id: "p4", name: "Meadow Farmlands", type: "Farmland" },
+  ],
+  propertyTypes: ["Plot", "Flat", "Villa", "Farmland", "Commercial"],
+  enquiryTypes: ["Hot", "Warm", "Cold"],
+  followupTypes: ["Regular Follow-up", "Site Visit", "Negotiation", "Booking", "Registration", "Post-Sale"],
+  waTemplates: [
+    { id: "t1", name: "Birthday Wish", text: "🎂 Many Happy Returns of the day, {name}! Wishing you a wonderful birthday filled with joy and success. – Your Real Estate Partner" },
+    { id: "t2", name: "New Listing Alert", text: "Hi {name}! We have an exciting new property that matches your requirements. Shall I share the details? 🏡" },
+    { id: "t3", name: "Follow-up Reminder", text: "Hi {name}! Just checking in on your property search. Have you had a chance to think about our last discussion? 😊" },
+    { id: "t4", name: "Festival Wishes", text: "🎉 Warm wishes to you and your family on this special occasion, {name}! May this festive season bring you happiness and prosperity." },
+  ],
+  lastSynced: null,
+};
+
+const loadDB = () => {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (raw) return { ...DEFAULT_DB, ...JSON.parse(raw) };
+  } catch {}
+  return { ...DEFAULT_DB };
+};
+
+const saveDB = (db) => {
+  try { localStorage.setItem(DB_KEY, JSON.stringify(db)); } catch {}
+};
+
+const getScriptURL = () => localStorage.getItem(SCRIPT_URL_KEY) || "";
+const setScriptURL = (url) => localStorage.setItem(SCRIPT_URL_KEY, url);
+
+// Sync to Google Sheets via Apps Script Web App
+const syncToSheets = async (db, scriptUrl) => {
+  if (!scriptUrl) throw new Error("No Script URL configured");
+  const payload = {
+    action: "syncAll",
+    customers: db.customers,
+    followups: db.followups,
+    projects: db.projects,
+  };
+  const res = await fetch(scriptUrl, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload),
+  });
+  return true;
+};
+
+// Pull latest data from Google Sheets
+const pullFromSheets = async (scriptUrl) => {
+  if (!scriptUrl) throw new Error("No Script URL configured");
+  const url = `${scriptUrl}?action=getAll&t=${Date.now()}`;
+  const res = await fetch(url, { mode: "cors" });
+  if (!res.ok) throw new Error("Failed to fetch from Sheets");
+  const data = await res.json();
+  return data;
+};
+
+// ============================================================
+// UTILS
+// ============================================================
+const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+const today = () => new Date().toISOString().split("T")[0];
+const todayDisplay = () => {
+  const d = new Date();
+  return { day: d.getDate(), month: d.getMonth(), year: d.getFullYear() };
+};
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const daysInMonth = (m, y) => new Date(y, m + 1, 0).getDate();
+const firstDayOfMonth = (m, y) => new Date(y, m, 1).getDay();
+const formatDate = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d} ${MONTHS[parseInt(m) - 1]?.slice(0, 3)} ${y}`;
+};
+const isBirthdayToday = (dob) => {
+  if (!dob) return false;
+  const t = new Date(), b = new Date(dob);
+  return b.getDate() === t.getDate() && b.getMonth() === t.getMonth();
+};
+
+const FU_COLORS = {
+  "Regular Follow-up": { bg: "rgba(99,179,237,0.15)", border: "#63B3ED", text: "#63B3ED", dot: "#63B3ED" },
+  "Site Visit":        { bg: "rgba(104,211,145,0.15)", border: "#68D391", text: "#68D391", dot: "#68D391" },
+  "Negotiation":       { bg: "rgba(246,173,85,0.15)",  border: "#F6AD55", text: "#F6AD55", dot: "#F6AD55" },
+  "Booking":           { bg: "rgba(154,117,233,0.15)", border: "#9A75E9", text: "#9A75E9", dot: "#9A75E9" },
+  "Registration":      { bg: "rgba(252,129,74,0.15)",  border: "#FC814A", text: "#FC814A", dot: "#FC814A" },
+  "Post-Sale":         { bg: "rgba(72,209,204,0.15)",  border: "#48D1CC", text: "#48D1CC", dot: "#48D1CC" },
+};
+const FU_ABBR = { "Regular Follow-up":"FU","Site Visit":"SV","Negotiation":"NG","Booking":"BK","Registration":"RG","Post-Sale":"PS" };
+
+// ============================================================
+// ICONS
+// ============================================================
+const Icon = {
+  home:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>,
+  addUser:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  activity:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>,
+  calendar:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+  heart:      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>,
+  settings:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20,height:20}}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  sync:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:16,height:16}}><polyline points="1,4 1,10 7,10"/><polyline points="23,20 23,14 17,14"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>,
+  download:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:16,height:16}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  upload:     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:16,height:16}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+  sheets:     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:16,height:16}}><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>,
+  phone:      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:14,height:14}}><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8a19.79 19.79 0 01-3.07-8.64A2 2 0 012 .18h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>,
+  whatsapp:   <svg viewBox="0 0 24 24" fill="currentColor" style={{width:14,height:14}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>,
+  close:      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:18,height:18}}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  save:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:15,height:15}}><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg>,
+  search:     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:15,height:15}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  check:      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{width:11,height:11}}><polyline points="20,6 9,17 4,12"/></svg>,
+  reschedule: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:14,height:14}}><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
+  copy:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:14,height:14}}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
+  info:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:14,height:14}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+  wifi:       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:10,height:10}}><path d="M5 12.55a11 11 0 0114.08 0"/><path d="M1.42 9a16 16 0 0121.16 0"/><path d="M8.53 16.11a6 6 0 016.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>,
+};
+
+// ============================================================
+// APPS SCRIPT CODE (shown in Settings tab)
+// ============================================================
+const APPS_SCRIPT_CODE = `// ═══════════════════════════════════════════════
+// REAL ESTATE CRM — Google Apps Script Backend
+// Paste this in: Extensions → Apps Script
+// Then: Deploy → New Deployment → Web App
+// Execute as: Me | Who can access: Anyone
+// ═══════════════════════════════════════════════
+
+const SHEET_NAME = "RE_CRM";
+
+function doGet(e) {
+  const action = e.parameter.action;
+  if (action === "getAll") return getAll();
+  return ContentService.createTextOutput(JSON.stringify({ error: "Unknown action" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    if (data.action === "syncAll") syncAll(data);
+    return ContentService.createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({ error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function getOrCreateSheet(name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+function writeTable(sheetName, rows, headers) {
+  const sheet = getOrCreateSheet(sheetName);
+  sheet.clearContents();
+  if (!rows || rows.length === 0) {
+    sheet.appendRow(headers);
+    return;
+  }
+  sheet.appendRow(headers);
+  rows.forEach(row => sheet.appendRow(headers.map(h => row[h] !== undefined ? row[h] : "")));
+  // Auto-resize columns
+  sheet.autoResizeColumns(1, headers.length);
+}
+
+function syncAll(data) {
+  // Customers sheet
+  writeTable("Customers", data.customers, [
+    "id","name","mobile","email","location","propertyType",
+    "budget","enquiryType","source","dob","notes","createdAt"
+  ]);
+  // FollowUps sheet
+  writeTable("FollowUps", data.followups, [
+    "id","customerId","followupType","scheduledDate","scheduledTime",
+    "discussion","notes","projectId","status","doneNotes","createdAt"
+  ]);
+  // Projects sheet
+  writeTable("Projects", data.projects, ["id","name","type"]);
+  // Log sync time
+  const logSheet = getOrCreateSheet("SyncLog");
+  logSheet.appendRow([new Date().toLocaleString(), "Sync successful",
+    (data.customers||[]).length + " customers",
+    (data.followups||[]).length + " followups"]);
+}
+
+function getAll() {
+  const readSheet = (name, headers) => {
+    const sheet = getOrCreateSheet(name);
+    const rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) return [];
+    const hdrs = rows[0];
+    return rows.slice(1).map(row => {
+      const obj = {};
+      hdrs.forEach((h, i) => { obj[h] = row[i] !== undefined ? String(row[i]) : ""; });
+      return obj;
+    });
+  };
+  const result = {
+    customers: readSheet("Customers"),
+    followups: readSheet("FollowUps"),
+    projects: readSheet("Projects"),
+  };
+  return ContentService.createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
+
+// ============================================================
+// MAIN APP
+// ============================================================
+export default function App() {
+  const [db, setDb] = useState(() => loadDB());
+  const [tab, setTab] = useState(0);
+  const [toast, setToast] = useState(null);
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | success | error
+  const [scriptUrl, setScriptUrlState] = useState(() => getScriptURL());
+  const [lastSynced, setLastSynced] = useState(db.lastSynced);
+
+  const updateDB = useCallback((updater) => {
+    setDb(prev => {
+      const next = updater(prev);
+      saveDB(next);
+      return next;
+    });
+  }, []);
+
+  const showToast = (msg, type = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Auto-sync 3 seconds after any DB change
+  useEffect(() => {
+    if (!scriptUrl) return;
+    const timer = setTimeout(() => {
+      handleSync(false);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [db.customers.length, db.followups.length]);
+
+  const handleSync = async (manual = true) => {
+    const url = getScriptURL();
+    if (!url) {
+      if (manual) showToast("Set your Script URL in Settings first ⚙️", "error");
+      return;
+    }
+    setSyncStatus("syncing");
+    try {
+      await syncToSheets(db, url);
+      const now = new Date().toLocaleTimeString();
+      setLastSynced(now);
+      updateDB(d => ({ ...d, lastSynced: now }));
+      setSyncStatus("success");
+      if (manual) showToast("Synced to Google Sheets ✅");
+      setTimeout(() => setSyncStatus("idle"), 3000);
+    } catch (err) {
+      setSyncStatus("error");
+      if (manual) showToast("Sync failed — check your Script URL", "error");
+      setTimeout(() => setSyncStatus("idle"), 3000);
+    }
+  };
+
+  const handlePull = async () => {
+    const url = getScriptURL();
+    if (!url) { showToast("Set your Script URL in Settings first ⚙️", "error"); return; }
+    setSyncStatus("syncing");
+    try {
+      const data = await pullFromSheets(url);
+      updateDB(d => ({
+        ...d,
+        customers: data.customers || d.customers,
+        followups: data.followups || d.followups,
+        projects: data.projects?.length ? data.projects : d.projects,
+      }));
+      setSyncStatus("success");
+      showToast(`Pulled ${data.customers?.length || 0} customers, ${data.followups?.length || 0} follow-ups ✅`);
+      setTimeout(() => setSyncStatus("idle"), 3000);
+    } catch (err) {
+      setSyncStatus("error");
+      showToast("Pull failed — check your Script URL", "error");
+      setTimeout(() => setSyncStatus("idle"), 3000);
+    }
+  };
+
+  const tabs = [
+    { label: "Home",     icon: Icon.home },
+    { label: "Add",      icon: Icon.addUser },
+    { label: "Log",      icon: Icon.activity },
+    { label: "Calendar", icon: Icon.calendar },
+    { label: "Engage",   icon: Icon.heart },
+    { label: "Settings", icon: Icon.settings },
+  ];
+
+  const syncColor = syncStatus === "syncing" ? "#F6AD55" : syncStatus === "success" ? "#68D391" : syncStatus === "error" ? "#FC814A" : scriptUrl ? "#68D391" : "rgba(255,255,255,0.2)";
+  const syncLabel = syncStatus === "syncing" ? "Syncing…" : syncStatus === "success" ? "Synced" : syncStatus === "error" ? "Sync Error" : scriptUrl ? (lastSynced ? `Last: ${lastSynced}` : "Connected") : "Not connected";
+
+  return (
+    <div style={{ fontFamily: "'DM Sans','Nunito',sans-serif", background: "#0A0E1A", minHeight: "100vh", maxWidth: 430, margin: "0 auto", display: "flex", flexDirection: "column", height: "100vh" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{width:0}
+        input,select,textarea{font-family:inherit}
+        .slide-up{animation:slideUp 0.3s cubic-bezier(0.16,1,0.3,1) forwards}
+        @keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+        .fade-in{animation:fadeIn 0.25s ease forwards}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        .spinning{animation:spin 1s linear infinite}
+        .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;letter-spacing:.5px}
+        .input-field{width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:11px 14px;color:#E8EAF6;font-size:14px;outline:none;transition:border-color .2s}
+        .input-field:focus{border-color:rgba(183,148,246,0.6);background:rgba(183,148,246,0.05)}
+        .input-field::placeholder{color:rgba(255,255,255,0.3)}
+        select.input-field option{background:#1A1F35}
+        .btn-primary{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:600;letter-spacing:.3px;transition:all .2s;background:linear-gradient(135deg,#B794F6,#7C5CBF);color:#fff}
+        .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+        .btn-secondary{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);cursor:pointer;font-size:13px;font-weight:500;background:rgba(255,255,255,0.04);color:#C4C8E0;transition:all .2s}
+        .btn-secondary:hover{background:rgba(255,255,255,0.08)}
+        .card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:16px}
+        .section-title{font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(183,148,246,0.7);margin-bottom:12px}
+        .label{font-size:12px;font-weight:500;color:rgba(255,255,255,0.45);margin-bottom:5px}
+        .toast{position:fixed;bottom:85px;left:50%;transform:translateX(-50%);padding:11px 20px;border-radius:12px;font-size:13px;font-weight:500;z-index:9999;white-space:nowrap;animation:fadeIn .3s ease;box-shadow:0 8px 24px rgba(0,0,0,0.4)}
+        code{font-family:monospace;font-size:11px;background:rgba(255,255,255,0.07);padding:2px 6px;border-radius:4px;color:#B794F6}
+      `}</style>
+
+      {/* Sync Status Bar */}
+      <div style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.05)", padding: "6px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: syncColor, transition: "background 0.3s", boxShadow: scriptUrl ? `0 0 6px ${syncColor}` : "none" }} />
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 500 }}>{syncLabel}</span>
+        </div>
+        {scriptUrl && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handlePull} title="Pull from Sheets" style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", fontSize: 11, fontWeight: 600, padding: "2px 6px", borderRadius: 6 }}>
+              <span style={{ display: "inline-flex", className: syncStatus === "syncing" ? "spinning" : "" }}>{Icon.download}</span> Pull
+            </button>
+            <button onClick={() => handleSync(true)} title="Push to Sheets" style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", color: "rgba(183,148,246,0.8)", fontSize: 11, fontWeight: 600, padding: "2px 6px", borderRadius: 6 }}>
+              <span style={{ display: "inline-flex" }}>{Icon.upload}</span> Sync
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Page Content */}
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 70 }}>
+        {tab === 0 && <Dashboard db={db} setTab={setTab} />}
+        {tab === 1 && <AddCustomer db={db} updateDB={updateDB} showToast={showToast} />}
+        {tab === 2 && <ActivityLog db={db} updateDB={updateDB} showToast={showToast} />}
+        {tab === 3 && <CalendarView db={db} updateDB={updateDB} showToast={showToast} />}
+        {tab === 4 && <Engage db={db} showToast={showToast} />}
+        {tab === 5 && <Settings db={db} updateDB={updateDB} showToast={showToast} scriptUrl={scriptUrl} setScriptUrlState={setScriptUrlState} handleSync={handleSync} handlePull={handlePull} syncStatus={syncStatus} lastSynced={lastSynced} />}
+      </div>
+
+      {/* Bottom Nav */}
+      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "rgba(10,14,26,0.97)", backdropFilter: "blur(20px)", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", zIndex: 100 }}>
+        {tabs.map((t, i) => (
+          <button key={i} onClick={() => setTab(i)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "10px 0 8px", border: "none", background: "transparent", cursor: "pointer", color: tab === i ? "#B794F6" : "rgba(255,255,255,0.3)", transition: "color 0.2s", gap: 3, position: "relative" }}>
+            {i === 2 && (
+              <div style={{ position: "absolute", top: -18, background: "linear-gradient(135deg,#B794F6,#7C5CBF)", borderRadius: "50%", padding: 12, boxShadow: "0 4px 20px rgba(183,148,246,0.5)", color: "#fff", border: "3px solid #0A0E1A" }}>
+                {t.icon}
+              </div>
+            )}
+            {i !== 2 && t.icon}
+            {i === 2 && <div style={{ height: 20 }} />}
+            <span style={{ fontSize: i === 5 ? 9 : 10, fontWeight: 600, letterSpacing: 0.3 }}>{t.label}</span>
+            {tab === i && i !== 2 && <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: 24, height: 2, background: "#B794F6", borderRadius: 2 }} />}
+            {/* Settings badge if not connected */}
+            {i === 5 && !scriptUrl && <div style={{ position: "absolute", top: 8, right: "18%", width: 6, height: 6, borderRadius: "50%", background: "#FC814A" }} />}
+          </button>
+        ))}
+      </div>
+
+      {toast && (
+        <div className="toast" style={{ background: toast.type === "success" ? "rgba(104,211,145,0.95)" : "rgba(252,129,74,0.95)", color: "#000" }}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SETTINGS PAGE
+// ============================================================
+function Settings({ db, updateDB, showToast, scriptUrl, setScriptUrlState, handleSync, handlePull, syncStatus, lastSynced }) {
+  const [urlInput, setUrlInput] = useState(scriptUrl);
+  const [copied, setCopied] = useState(false);
+  const [step, setStep] = useState(1);
+
+  const saveUrl = () => {
+    setScriptURL(urlInput.trim());
+    setScriptUrlState(urlInput.trim());
+    showToast("Script URL saved! ✅");
+  };
+
+  const copyScript = () => {
+    navigator.clipboard.writeText(APPS_SCRIPT_CODE);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+    showToast("Apps Script code copied! 📋");
+  };
+
+  const exportCSV = (table) => {
+    const rows = db[table];
+    if (!rows || rows.length === 0) { showToast("No data to export", "error"); return; }
+    const headers = Object.keys(rows[0]);
+    const csv = [headers.join(","), ...rows.map(r => headers.map(h => `"${(r[h]||"").toString().replace(/"/g,'""')}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `${table}_${today()}.csv`; a.click();
+    showToast(`${table} exported as CSV ✅`);
+  };
+
+  const steps = [
+    { num: 1, title: "Create Google Sheet", desc: "Go to sheets.google.com → Create a new blank spreadsheet → Name it RE_CRM" },
+    { num: 2, title: "Open Apps Script", desc: "Inside the sheet → Extensions menu → Apps Script → Delete default code" },
+    { num: 3, title: "Paste the Script", desc: "Click 'Copy Script' below → Paste it in the Apps Script editor → Click Save (💾)" },
+    { num: 4, title: "Deploy as Web App", desc: "Click Deploy → New Deployment → Type: Web App → Execute as: Me → Who can access: Anyone → Deploy → Authorize" },
+    { num: 5, title: "Copy Web App URL", desc: "Copy the Web App URL that appears → Paste it in the field below → Save" },
+  ];
+
+  return (
+    <div style={{ padding: "0 16px 16px" }} className="slide-up">
+      <div style={{ padding: "20px 0 16px" }}>
+        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 24, color: "#E8EAF6" }}>⚙️ <span style={{ color: "#B794F6" }}>Settings</span></div>
+        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>Google Sheets sync & data backup</div>
+      </div>
+
+      {/* Connection Status */}
+      <div style={{ background: scriptUrl ? "rgba(104,211,145,0.08)" : "rgba(252,129,74,0.08)", border: `1px solid ${scriptUrl ? "rgba(104,211,145,0.25)" : "rgba(252,129,74,0.25)"}`, borderRadius: 14, padding: "14px 16px", marginBottom: 18, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontSize: 24 }}>{scriptUrl ? "🟢" : "🔴"}</div>
+        <div>
+          <div style={{ fontWeight: 600, color: scriptUrl ? "#68D391" : "#FC814A", fontSize: 14 }}>{scriptUrl ? "Connected to Google Sheets" : "Not Connected"}</div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{scriptUrl ? (lastSynced ? `Last synced: ${lastSynced}` : "Ready to sync") : "Follow the steps below to connect"}</div>
+        </div>
+      </div>
+
+      {/* Setup Steps */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="section-title">Setup Guide (One-Time · 5 mins)</div>
+        {steps.map(s => (
+          <div key={s.num} onClick={() => setStep(s.num)} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: s.num < 5 ? "1px solid rgba(255,255,255,0.05)" : "none", cursor: "pointer" }}>
+            <div style={{ width: 26, height: 26, borderRadius: "50%", background: step === s.num ? "linear-gradient(135deg,#B794F6,#7C5CBF)" : "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: step === s.num ? "#fff" : "rgba(255,255,255,0.4)", flexShrink: 0 }}>
+              {s.num}
+            </div>
+            <div>
+              <div style={{ fontWeight: 600, color: "#E8EAF6", fontSize: 13 }}>{s.title}</div>
+              {step === s.num && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 4, lineHeight: 1.6 }}>{s.desc}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Copy Script Button */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="section-title">Apps Script Code</div>
+        <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "10px 12px", marginBottom: 12, maxHeight: 100, overflowY: "auto" }}>
+          <pre style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{APPS_SCRIPT_CODE.slice(0, 300)}...</pre>
+        </div>
+        <button onClick={copyScript} className="btn-primary" style={{ background: copied ? "linear-gradient(135deg,#68D391,#38A169)" : "linear-gradient(135deg,#B794F6,#7C5CBF)" }}>
+          {copied ? Icon.check : Icon.copy} {copied ? "Copied! Paste in Apps Script" : "Copy Full Script Code"}
+        </button>
+      </div>
+
+      {/* Script URL Input */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="section-title">Your Web App URL</div>
+        <div style={{ marginBottom: 10 }}>
+          <div className="label">Paste your Apps Script Web App URL here</div>
+          <input value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="input-field" />
+        </div>
+        <button onClick={saveUrl} className="btn-primary">{Icon.save} Save URL</button>
+      </div>
+
+      {/* Sync Controls */}
+      {scriptUrl && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="section-title">Sync Controls</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <button onClick={() => handleSync(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "12px", borderRadius: 12, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", color: "#fff", fontSize: 13, fontWeight: 600 }}>
+              <span style={{ display: "inline-flex", animation: syncStatus === "syncing" ? "spin 1s linear infinite" : "none" }}>{Icon.upload}</span>
+              Push to Sheets
+            </button>
+            <button onClick={handlePull} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "12px", borderRadius: 12, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#63B3ED,#2B6CB0)", color: "#fff", fontSize: 13, fontWeight: 600 }}>
+              {Icon.download} Pull from Sheets
+            </button>
+          </div>
+          <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 10, fontSize: 12, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
+            <strong style={{ color: "rgba(255,255,255,0.6)" }}>Push:</strong> Sends all local data → Google Sheets<br />
+            <strong style={{ color: "rgba(255,255,255,0.6)" }}>Pull:</strong> Imports data from Google Sheets → this app<br />
+            <strong style={{ color: "rgba(255,255,255,0.6)" }}>Auto-sync:</strong> Triggers 3 sec after adding customers/follow-ups
+          </div>
+        </div>
+      )}
+
+      {/* CSV Export */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="section-title">Manual CSV Export (Offline Backup)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[
+            { key: "customers", label: "Export Customers", icon: "👥", count: db.customers.length },
+            { key: "followups", label: "Export Follow-ups", icon: "📅", count: db.followups.length },
+          ].map(({ key, label, icon, count }) => (
+            <button key={key} onClick={() => exportCSV(key)} className="btn-secondary" style={{ justifyContent: "space-between" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{icon}</span> {label}
+              </span>
+              <span style={{ fontSize: 11, background: "rgba(183,148,246,0.15)", color: "#B794F6", padding: "2px 8px", borderRadius: 99, fontWeight: 700 }}>{count} records</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="card">
+        <div className="section-title">Database Stats</div>
+        {[
+          { label: "Total Customers", value: db.customers.length, color: "#63B3ED" },
+          { label: "Total Follow-ups", value: db.followups.length, color: "#B794F6" },
+          { label: "Done Follow-ups", value: db.followups.filter(f => f.status === "Done").length, color: "#68D391" },
+          { label: "Pending Follow-ups", value: db.followups.filter(f => f.status !== "Done").length, color: "#F6AD55" },
+          { label: "Hot Leads", value: db.customers.filter(c => c.enquiryType === "Hot").length, color: "#FC814A" },
+        ].map((s, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < 4 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>{s.label}</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: s.color }}>{s.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function Dashboard({ db, setTab }) {
+  const { customers, followups } = db;
+  const todayStr = today();
+  const t = todayDisplay();
+  const todayFUs = followups.filter(f => f.scheduledDate === todayStr && f.status !== "Done");
+  const hotLeads = customers.filter(c => c.enquiryType === "Hot").length;
+  const thisMonthFUs = followups.filter(f => { const d = new Date(f.scheduledDate); return d.getMonth() === t.month && d.getFullYear() === t.year; }).length;
+  const birthdays = customers.filter(c => isBirthdayToday(c.dob));
+
+  return (
+    <div style={{ padding: "0 16px 16px" }} className="slide-up">
+      <div style={{ padding: "20px 0 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 500 }}>{MONTHS[t.month]} {t.year}</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 26, color: "#E8EAF6", letterSpacing: -0.5, lineHeight: 1.2 }}>Good day,<br /><span style={{ color: "#B794F6" }}>Agent! 👋</span></div>
+          </div>
+          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🏡</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 18 }}>
+        {[
+          { label: "Customers", value: customers.length, color: "#63B3ED", emoji: "👥" },
+          { label: "Hot Leads", value: hotLeads, color: "#FC814A", emoji: "🔥" },
+          { label: "This Month", value: thisMonthFUs, color: "#68D391", emoji: "📅" },
+        ].map((s, i) => (
+          <div key={i} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "12px 10px", textAlign: "center" }}>
+            <div style={{ fontSize: 18, marginBottom: 4 }}>{s.emoji}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 3, fontWeight: 500 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="section-title" style={{ marginBottom: 0 }}>Today's Follow-ups ({todayFUs.length})</div>
+          <button onClick={() => setTab(3)} style={{ fontSize: 11, color: "#B794F6", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>View Calendar →</button>
+        </div>
+        {todayFUs.length === 0 ? (
+          <div className="card" style={{ textAlign: "center", padding: 24 }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 13 }}>No follow-ups scheduled today</div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {todayFUs.slice(0, 5).map((fu, i) => {
+              const cust = db.customers.find(c => c.id === fu.customerId);
+              const colors = FU_COLORS[fu.followupType] || FU_COLORS["Regular Follow-up"];
+              return (
+                <div key={i} className="card" style={{ borderLeft: `3px solid ${colors.border}`, padding: "12px 14px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: "#E8EAF6", fontSize: 14 }}>{cust?.name || "Unknown"}</div>
+                      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{cust?.mobile} · {fu.scheduledTime}</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                      <span className="pill" style={{ background: colors.bg, color: colors.text, border: `1px solid ${colors.border}` }}>{fu.followupType}</span>
+                      <div style={{ display: "flex", gap: 5 }}>
+                        <a href={`tel:${cust?.mobile?.replace(/\D/g,"")}`} style={{ color: "#63B3ED", padding: 5, borderRadius: 7, background: "rgba(99,179,237,0.1)", display: "flex" }}>{Icon.phone}</a>
+                        <a href={`https://wa.me/${cust?.mobile?.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{ color: "#25D366", padding: 5, borderRadius: 7, background: "rgba(37,211,102,0.1)", display: "flex" }}>{Icon.whatsapp}</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {birthdays.length > 0 && (
+        <div style={{ background: "rgba(252,129,74,0.1)", border: "1px solid rgba(252,129,74,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 20 }}>🎂</span>
+            <div style={{ fontWeight: 600, color: "#FC814A", fontSize: 14 }}>{birthdays.length} Birthday{birthdays.length > 1 ? "s" : ""} Today!</div>
+          </div>
+          {birthdays.map((c, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: i > 0 ? 8 : 0 }}>
+              <div>
+                <div style={{ fontWeight: 600, color: "#E8EAF6", fontSize: 13 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{c.mobile}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <a href={`tel:${c.mobile}`} style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderRadius: 8, background: "rgba(99,179,237,0.15)", border: "1px solid rgba(99,179,237,0.3)", color: "#63B3ED", fontSize: 12, fontWeight: 600, textDecoration: "none" }}>{Icon.phone} Call</a>
+                <a href={`https://wa.me/${c.mobile.replace(/\D/g,"")}?text=${encodeURIComponent(`🎂 Many Happy Returns of the day, ${c.name}! Wishing you a wonderful birthday! – Your Real Estate Partner`)}`} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderRadius: 8, background: "rgba(37,211,102,0.15)", border: "1px solid rgba(37,211,102,0.3)", color: "#25D366", fontSize: 12, fontWeight: 600, textDecoration: "none" }}>{Icon.whatsapp} Wish</a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// ADD CUSTOMER
+// ============================================================
+function AddCustomer({ db, updateDB, showToast }) {
+  const empty = { name:"",mobile:"",email:"",location:"",propertyType:"",budget:"",enquiryType:"Warm",source:"",dob:"",notes:"" };
+  const [form, setForm] = useState(empty);
+  const [errors, setErrors] = useState({});
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const handleSave = () => {
+    const e = {};
+    if (!form.name.trim()) e.name = "Required";
+    if (!form.mobile.trim()) e.mobile = "Required";
+    if (Object.keys(e).length) { setErrors(e); return; }
+    updateDB(db => ({ ...db, customers: [...db.customers, { ...form, id: genId(), createdAt: today() }] }));
+    showToast("Customer added & auto-syncing to Sheets 🎉");
+    setForm(empty); setErrors({});
+  };
+
+  const F = ({ label, k, type="text", placeholder="" }) => (
+    <div style={{ marginBottom: 14 }}>
+      <div className="label">{label}</div>
+      <input type={type} value={form[k]} onChange={e => set(k, e.target.value)} placeholder={placeholder} className="input-field" style={errors[k] ? { borderColor:"#FC814A" } : {}} />
+      {errors[k] && <div style={{ fontSize:11,color:"#FC814A",marginTop:4 }}>{errors[k]}</div>}
+    </div>
+  );
+  const S = ({ label, k, options }) => (
+    <div style={{ marginBottom: 14 }}>
+      <div className="label">{label}</div>
+      <select value={form[k]} onChange={e => set(k, e.target.value)} className="input-field">
+        <option value="">Select...</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+
+  return (
+    <div style={{ padding:"0 16px 16px" }} className="slide-up">
+      <div style={{ padding:"20px 0 16px" }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#E8EAF6" }}>Add <span style={{color:"#B794F6"}}>Customer</span></div>
+        <div style={{ fontSize:13,color:"rgba(255,255,255,0.4)",marginTop:2 }}>New lead profile — auto-saves to Google Sheets</div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="section-title">Personal Info</div>
+        <F label="Full Name *" k="name" placeholder="Rajesh Kumar" />
+        <F label="Mobile Number *" k="mobile" type="tel" placeholder="+91 9876543210" />
+        <F label="Email Address" k="email" type="email" placeholder="rajesh@email.com" />
+        <F label="Date of Birth" k="dob" type="date" />
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="section-title">Property Interest</div>
+        <F label="Location / Area" k="location" placeholder="Hyderabad, Gachibowli" />
+        <S label="Property Type" k="propertyType" options={db.propertyTypes} />
+        <F label="Budget" k="budget" placeholder="₹50L – ₹80L" />
+        <S label="Enquiry Type" k="enquiryType" options={db.enquiryTypes} />
+      </div>
+      <div className="card" style={{marginBottom:16}}>
+        <div className="section-title">Additional Info</div>
+        <S label="Source" k="source" options={["Walk-in","Phone Enquiry","Website","Referral","Social Media","Newspaper","Site Visit","Other"]} />
+        <div style={{marginBottom:14}}>
+          <div className="label">Notes</div>
+          <textarea value={form.notes} onChange={e => set("notes",e.target.value)} placeholder="Specific requirements..." className="input-field" rows={3} style={{resize:"none"}} />
+        </div>
+      </div>
+      <button className="btn-primary" onClick={handleSave}>{Icon.save} Save Customer</button>
+    </div>
+  );
+}
+
+// ============================================================
+// ACTIVITY LOG
+// ============================================================
+function ActivityLog({ db, updateDB, showToast }) {
+  const [search, setSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [form, setForm] = useState({ followupType:"",scheduledDate:today(),scheduledTime:"10:00",notes:"",projectId:"",discussion:"" });
+  const [history, setHistory] = useState([]);
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const filtered = db.customers.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.mobile.includes(search)).slice(0, 8);
+
+  const selectCustomer = (c) => {
+    setSelectedCustomer(c); setSearch(c.name); setShowDropdown(false);
+    setHistory(db.followups.filter(f => f.customerId === c.id).sort((a,b) => b.createdAt > a.createdAt ? 1 : -1));
+  };
+
+  const handleSave = () => {
+    if (!selectedCustomer) { showToast("Select a customer first","error"); return; }
+    if (!form.followupType) { showToast("Select follow-up type","error"); return; }
+    const newFU = { ...form, id:genId(), customerId:selectedCustomer.id, status:"Scheduled", createdAt:new Date().toISOString() };
+    updateDB(db => ({ ...db, followups:[...db.followups, newFU] }));
+    showToast("Activity logged & syncing to Sheets ✅");
+    setForm({ followupType:"",scheduledDate:today(),scheduledTime:"10:00",notes:"",projectId:"",discussion:"" });
+    setHistory(prev => [newFU,...prev]);
+  };
+
+  return (
+    <div style={{ padding:"0 16px 16px" }} className="slide-up">
+      <div style={{ padding:"20px 0 16px" }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#E8EAF6" }}>Activity <span style={{color:"#B794F6"}}>Log</span></div>
+        <div style={{ fontSize:13,color:"rgba(255,255,255,0.4)",marginTop:2 }}>Log interactions & schedule follow-ups</div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="section-title">Search Customer</div>
+        <div style={{position:"relative"}}>
+          <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"rgba(255,255,255,0.4)"}}>{Icon.search}</div>
+          <input value={search} onChange={e=>{setSearch(e.target.value);setShowDropdown(true);setSelectedCustomer(null);}} onFocus={()=>setShowDropdown(true)} placeholder="Search by name or mobile..." className="input-field" style={{paddingLeft:36}} />
+        </div>
+        {showDropdown && search && filtered.length > 0 && (
+          <div style={{background:"#131829",border:"1px solid rgba(255,255,255,0.1)",borderRadius:10,marginTop:6,overflow:"hidden"}}>
+            {filtered.map(c=>(
+              <div key={c.id} onClick={()=>selectCustomer(c)} style={{padding:"10px 14px",cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,0.05)",display:"flex",justifyContent:"space-between"}}
+                onMouseEnter={e=>e.currentTarget.style.background="rgba(183,148,246,0.1)"}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <div>
+                  <div style={{fontWeight:600,color:"#E8EAF6",fontSize:13}}>{c.name}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{c.mobile}</div>
+                </div>
+                <span className="pill" style={{background:c.enquiryType==="Hot"?"rgba(252,129,74,0.15)":c.enquiryType==="Warm"?"rgba(246,173,85,0.15)":"rgba(99,179,237,0.15)",color:c.enquiryType==="Hot"?"#FC814A":c.enquiryType==="Warm"?"#F6AD55":"#63B3ED",border:`1px solid ${c.enquiryType==="Hot"?"#FC814A":c.enquiryType==="Warm"?"#F6AD55":"#63B3ED"}`}}>{c.enquiryType}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {selectedCustomer && (
+          <div style={{marginTop:10,background:"rgba(183,148,246,0.08)",border:"1px solid rgba(183,148,246,0.2)",borderRadius:10,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontWeight:600,color:"#E8EAF6",fontSize:13}}>{selectedCustomer.name}</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{selectedCustomer.mobile} · {selectedCustomer.propertyType} · {selectedCustomer.location}</div>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <a href={`tel:${selectedCustomer.mobile}`} style={{color:"#63B3ED",padding:6,borderRadius:8,background:"rgba(99,179,237,0.1)",display:"flex"}}>{Icon.phone}</a>
+              <a href={`https://wa.me/${selectedCustomer.mobile.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{color:"#25D366",padding:6,borderRadius:8,background:"rgba(37,211,102,0.1)",display:"flex"}}>{Icon.whatsapp}</a>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {selectedCustomer && (
+        <div className="card" style={{marginBottom:14}}>
+          <div className="section-title">Log Interaction</div>
+          <div style={{marginBottom:14}}>
+            <div className="label">Discussion Summary</div>
+            <textarea value={form.discussion} onChange={e=>set("discussion",e.target.value)} placeholder="What was discussed?" className="input-field" rows={2} style={{resize:"none"}} />
+          </div>
+          <div style={{marginBottom:14}}>
+            <div className="label">Follow-up Type</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+              {db.followupTypes.map(ft=>{
+                const sel=form.followupType===ft, colors=FU_COLORS[ft];
+                return <button key={ft} onClick={()=>set("followupType",ft)} style={{padding:"6px 12px",borderRadius:99,border:`1px solid ${sel?colors.border:"rgba(255,255,255,0.1)"}`,background:sel?colors.bg:"transparent",color:sel?colors.text:"rgba(255,255,255,0.5)",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all .2s"}}>{ft}</button>;
+              })}
+            </div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <div className="label">Project Interested In</div>
+            <select value={form.projectId} onChange={e=>set("projectId",e.target.value)} className="input-field">
+              <option value="">Select project...</option>
+              {db.projects.map(p=><option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}
+            </select>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            <div><div className="label">Scheduled Date</div><input type="date" value={form.scheduledDate} min={today()} onChange={e=>set("scheduledDate",e.target.value)} className="input-field" /></div>
+            <div><div className="label">Time</div><input type="time" value={form.scheduledTime} onChange={e=>set("scheduledTime",e.target.value)} className="input-field" /></div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <div className="label">Next Follow-up Notes</div>
+            <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="What to discuss next time..." className="input-field" rows={2} style={{resize:"none"}} />
+          </div>
+          <button className="btn-primary" onClick={handleSave}>{Icon.save} Save Activity & Schedule</button>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div>
+          <div className="section-title">Activity History</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {history.map((fu,i)=>{
+              const colors=FU_COLORS[fu.followupType]||{};
+              return (
+                <div key={i} className="card" style={{borderLeft:`3px solid ${colors.border}`,padding:"12px 14px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <span className="pill" style={{background:colors.bg,color:colors.text,border:`1px solid ${colors.border}`}}>{fu.followupType}</span>
+                    <span style={{fontSize:11,color:"rgba(255,255,255,0.3)"}}>{formatDate(fu.scheduledDate)} {fu.scheduledTime}</span>
+                  </div>
+                  {fu.discussion && <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",marginTop:8}}>{fu.discussion}</div>}
+                  {fu.notes && <div style={{fontSize:12,color:"rgba(255,255,255,0.35)",marginTop:4,fontStyle:"italic"}}>Next: {fu.notes}</div>}
+                  <div style={{marginTop:6}}>
+                    <span className="pill" style={{background:fu.status==="Done"?"rgba(104,211,145,0.15)":"rgba(246,173,85,0.15)",color:fu.status==="Done"?"#68D391":"#F6AD55",border:`1px solid ${fu.status==="Done"?"#68D391":"#F6AD55"}`}}>{fu.status}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// CALENDAR VIEW
+// ============================================================
+function CalendarView({ db, updateDB, showToast }) {
+  const t = todayDisplay();
+  const [month, setMonth] = useState(t.month);
+  const [year, setYear] = useState(t.year);
+  const [selected, setSelected] = useState(null);
+  const [modalFU, setModalFU] = useState(null);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("");
+  const [noteText, setNoteText] = useState("");
+
+  const days = daysInMonth(month, year);
+  const firstDay = firstDayOfMonth(month, year);
+
+  const fuMap = {};
+  db.followups.forEach(fu => {
+    const d = new Date(fu.scheduledDate);
+    if (d.getMonth()===month && d.getFullYear()===year) {
+      const day=d.getDate();
+      if (!fuMap[day]) fuMap[day]=[];
+      fuMap[day].push(fu);
+    }
+  });
+  db.customers.forEach(c => {
+    if (c.dob) {
+      const b=new Date(c.dob);
+      if (b.getMonth()===month) {
+        const day=b.getDate();
+        if (!fuMap[day]) fuMap[day]=[];
+        fuMap[day].push({__bday:true,customerName:c.name,mobile:c.mobile,id:"b"+c.id});
+      }
+    }
+  });
+
+  const selectedFUs = selected ? (fuMap[selected]||[]) : [];
+  const years = Array.from({length:3},(_,i)=>t.year-1+i);
+
+  const markDone = (fu) => {
+    updateDB(db=>({...db,followups:db.followups.map(f=>f.id===fu.id?{...f,status:"Done",doneNotes:noteText}:f)}));
+    showToast("Marked done & syncing ✅"); setModalFU(null); setNoteText("");
+  };
+  const doReschedule = (fu) => {
+    if (!rescheduleDate) { showToast("Pick a reschedule date","error"); return; }
+    updateDB(db=>({...db,followups:db.followups.map(f=>f.id===fu.id?{...f,scheduledDate:rescheduleDate,scheduledTime:rescheduleTime||f.scheduledTime,status:"Rescheduled"}:f)}));
+    showToast("Rescheduled & syncing 📅"); setModalFU(null); setRescheduleDate(""); setRescheduleTime("");
+  };
+
+  return (
+    <div style={{ padding:"0 16px 16px" }} className="slide-up">
+      <div style={{ padding:"20px 0 16px" }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#E8EAF6" }}>Intelligence <span style={{color:"#B794F6"}}>Calendar</span></div>
+        <div style={{ fontSize:13,color:"rgba(255,255,255,0.4)",marginTop:2 }}>Control tower for all your follow-ups</div>
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:16}}>
+        <select value={month} onChange={e=>setMonth(parseInt(e.target.value))} className="input-field" style={{flex:2}}>
+          {MONTHS.map((m,i)=><option key={i} value={i}>{m}</option>)}
+        </select>
+        <select value={year} onChange={e=>setYear(parseInt(e.target.value))} className="input-field" style={{flex:1}}>
+          {years.map(y=><option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+
+      <div className="card" style={{padding:"12px 8px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",marginBottom:6}}>
+          {DAYS_SHORT.map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"rgba(183,148,246,0.6)",letterSpacing:.5,padding:"4px 0"}}>{d}</div>)}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"3px 2px"}}>
+          {Array.from({length:firstDay}).map((_,i)=><div key={"e"+i} />)}
+          {Array.from({length:days}).map((_,i)=>{
+            const day=i+1;
+            const dayFUs=fuMap[day]||[];
+            const actualFUs=dayFUs.filter(f=>!f.__bday);
+            const bdayFUs=dayFUs.filter(f=>f.__bday);
+            const isToday=day===t.day&&month===t.month&&year===t.year;
+            const isSelected=selected===day;
+            const typeCounts={};
+            actualFUs.forEach(f=>{ typeCounts[f.followupType]=(typeCounts[f.followupType]||0)+1; });
+            return (
+              <div key={day} onClick={()=>setSelected(isSelected?null:day)} style={{borderRadius:10,padding:"5px 3px",cursor:dayFUs.length>0?"pointer":"default",background:isSelected?"rgba(183,148,246,0.15)":isToday?"rgba(183,148,246,0.08)":"transparent",border:isToday?"1px solid rgba(183,148,246,0.4)":isSelected?"1px solid rgba(183,148,246,0.5)":"1px solid transparent",minHeight:52,transition:"all .15s"}}>
+                <div style={{textAlign:"center",fontSize:12,fontWeight:isToday?700:500,color:isToday?"#B794F6":"rgba(255,255,255,0.7)",marginBottom:3}}>{day}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:2,justifyContent:"center"}}>
+                  {Object.entries(typeCounts).slice(0,3).map(([type,cnt],ti)=>{
+                    const colors=FU_COLORS[type];
+                    return <div key={ti} style={{display:"flex",alignItems:"center",gap:1}}><div style={{width:5,height:5,borderRadius:"50%",background:colors?.dot||"#999"}} />{cnt>1&&<span style={{fontSize:8,color:colors?.text||"#999",fontWeight:700}}>{cnt}</span>}</div>;
+                  })}
+                  {bdayFUs.length>0&&<span style={{fontSize:9}}>🎂</span>}
+                </div>
+                {actualFUs.length>0&&<div style={{textAlign:"center",fontSize:8,color:"rgba(255,255,255,0.3)",marginTop:1}}>{actualFUs.length} {actualFUs.length===1?"FU":"FUs"}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:12}}>
+        {Object.entries(FU_COLORS).map(([type,colors])=>(
+          <div key={type} style={{display:"flex",alignItems:"center",gap:4}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:colors.dot}} />
+            <span style={{fontSize:10,color:"rgba(255,255,255,0.4)"}}>{FU_ABBR[type]}</span>
+          </div>
+        ))}
+      </div>
+
+      {selected && selectedFUs.length > 0 && (
+        <div style={{marginTop:16}} className="fade-in">
+          <div className="section-title">{formatDate(`${year}-${String(month+1).padStart(2,"0")}-${String(selected).padStart(2,"0")}`)}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {selectedFUs.map((fu,i)=>{
+              if (fu.__bday) return (
+                <div key={i} className="card" style={{borderLeft:"3px solid #FC814A",padding:"12px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{fontSize:16}}>🎂</span>
+                    <div>
+                      <div style={{fontWeight:600,color:"#E8EAF6",fontSize:14}}>{fu.customerName}</div>
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{fu.mobile} · Birthday</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <a href={`tel:${fu.mobile.replace(/\D/g,"")}`} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"8px",borderRadius:10,background:"rgba(99,179,237,0.1)",border:"1px solid rgba(99,179,237,0.2)",color:"#63B3ED",fontSize:13,fontWeight:600,textDecoration:"none"}}>{Icon.phone} Call</a>
+                    <a href={`https://wa.me/${fu.mobile.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"8px",borderRadius:10,background:"rgba(37,211,102,0.1)",border:"1px solid rgba(37,211,102,0.2)",color:"#25D366",fontSize:13,fontWeight:600,textDecoration:"none"}}>{Icon.whatsapp} Wish</a>
+                  </div>
+                </div>
+              );
+              const cust=db.customers.find(c=>c.id===fu.customerId);
+              const colors=FU_COLORS[fu.followupType]||{};
+              return (
+                <div key={i} className="card" style={{borderLeft:`3px solid ${colors.border}`,padding:"12px 14px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div>
+                      <div style={{fontWeight:600,color:"#E8EAF6",fontSize:14}}>{cust?.name||"Unknown"}</div>
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{cust?.mobile} · {fu.scheduledTime}</div>
+                    </div>
+                    <span className="pill" style={{background:colors.bg,color:colors.text,border:`1px solid ${colors.border}`}}>{fu.followupType}</span>
+                  </div>
+                  {fu.notes&&<div style={{fontSize:12,color:"rgba(255,255,255,0.4)",marginBottom:10,fontStyle:"italic"}}>{fu.notes}</div>}
+                  <div style={{display:"flex",gap:6,marginBottom:fu.status!=="Done"?10:0}}>
+                    <a href={`tel:${cust?.mobile?.replace(/\D/g,"")}`} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"8px",borderRadius:10,background:"rgba(99,179,237,0.1)",border:"1px solid rgba(99,179,237,0.2)",color:"#63B3ED",fontSize:12,fontWeight:600,textDecoration:"none"}}>{Icon.phone} Call</a>
+                    <a href={`https://wa.me/${cust?.mobile?.replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"8px",borderRadius:10,background:"rgba(37,211,102,0.1)",border:"1px solid rgba(37,211,102,0.2)",color:"#25D366",fontSize:12,fontWeight:600,textDecoration:"none"}}>{Icon.whatsapp} WhatsApp</a>
+                  </div>
+                  {fu.status!=="Done"&&<button onClick={()=>setModalFU(fu)} style={{width:"100%",padding:"8px",borderRadius:10,background:"rgba(183,148,246,0.1)",border:"1px solid rgba(183,148,246,0.3)",color:"#B794F6",fontSize:12,fontWeight:600,cursor:"pointer"}}>Update Follow-up →</button>}
+                  {fu.status==="Done"&&<span className="pill" style={{background:"rgba(104,211,145,0.15)",color:"#68D391",border:"1px solid #68D391"}}>✓ Done</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {modalFU && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModalFU(null)} className="fade-in">
+          <div style={{width:"100%",maxWidth:430,background:"#131829",borderRadius:"20px 20px 0 0",padding:"20px 16px 30px",border:"1px solid rgba(255,255,255,0.1)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#E8EAF6"}}>Update Follow-up</div>
+              <button onClick={()=>setModalFU(null)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.5)",padding:4}}>{Icon.close}</button>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div className="label">Notes / Summary</div>
+              <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="What was discussed?" className="input-field" rows={3} style={{resize:"none"}} />
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <div><div className="label">Reschedule Date</div><input type="date" value={rescheduleDate} min={today()} onChange={e=>setRescheduleDate(e.target.value)} className="input-field" /></div>
+              <div><div className="label">Time</div><input type="time" value={rescheduleTime} onChange={e=>setRescheduleTime(e.target.value)} className="input-field" /></div>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>markDone(modalFU)} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"11px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#68D391,#38A169)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>{Icon.check} Mark Done</button>
+              <button onClick={()=>doReschedule(modalFU)} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"11px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#F6AD55,#C27803)",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>{Icon.reschedule} Reschedule</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// ENGAGE
+// ============================================================
+function Engage({ db, showToast }) {
+  const [activeSection, setActiveSection] = useState("birthdays");
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [customMsg, setCustomMsg] = useState("");
+  const [selectedCustomers, setSelectedCustomers] = useState([]);
+  const [searchBroadcast, setSearchBroadcast] = useState("");
+
+  const birthdays = db.customers.filter(c => isBirthdayToday(c.dob));
+  const allCustomers = db.customers.filter(c => c.name.toLowerCase().includes(searchBroadcast.toLowerCase()) || c.mobile.includes(searchBroadcast));
+  const toggleCustomer = (id) => setSelectedCustomers(prev => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const buildMsg = (cust) => {
+    const tmpl=selectedTemplate?db.waTemplates.find(t=>t.id===selectedTemplate)?.text:customMsg;
+    if (!tmpl) return "";
+    return tmpl.replace(/{name}/g, cust.name);
+  };
+
+  return (
+    <div style={{ padding:"0 16px 16px" }} className="slide-up">
+      <div style={{ padding:"20px 0 16px" }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#E8EAF6" }}>Customer <span style={{color:"#B794F6"}}>Engage</span></div>
+        <div style={{ fontSize:13,color:"rgba(255,255,255,0.4)",marginTop:2 }}>Celebrate & broadcast with your customers</div>
+      </div>
+      <div style={{display:"flex",background:"rgba(255,255,255,0.04)",borderRadius:12,padding:4,marginBottom:18,border:"1px solid rgba(255,255,255,0.07)"}}>
+        {[{id:"birthdays",label:"🎂 Birthdays"},{id:"broadcast",label:"📢 Broadcast"}].map(s=>(
+          <button key={s.id} onClick={()=>setActiveSection(s.id)} style={{flex:1,padding:"9px",borderRadius:9,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:activeSection===s.id?"linear-gradient(135deg,#B794F6,#7C5CBF)":"transparent",color:activeSection===s.id?"#fff":"rgba(255,255,255,0.4)",transition:"all .2s"}}>{s.label}</button>
+        ))}
+      </div>
+
+      {activeSection==="birthdays" && (
+        <div className="fade-in">
+          {birthdays.length===0?(
+            <div className="card" style={{textAlign:"center",padding:32}}>
+              <div style={{fontSize:36,marginBottom:10}}>🎉</div>
+              <div style={{color:"#E8EAF6",fontWeight:600,marginBottom:6}}>No birthdays today!</div>
+              <div style={{color:"rgba(255,255,255,0.4)",fontSize:13}}>Add DOB when creating customers to see birthday alerts</div>
+            </div>
+          ):(
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,background:"rgba(252,129,74,0.1)",border:"1px solid rgba(252,129,74,0.25)",borderRadius:12,padding:"10px 14px"}}>
+                <span style={{fontSize:20}}>🎂</span>
+                <div style={{fontWeight:600,color:"#FC814A",fontSize:14}}>{birthdays.length} birthday{birthdays.length>1?"s":""} today!</div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {birthdays.map((c,i)=>(
+                  <div key={i} className="card" style={{borderLeft:"3px solid #FC814A"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{width:38,height:38,borderRadius:"50%",background:"linear-gradient(135deg,rgba(252,129,74,0.3),rgba(183,148,246,0.3))",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#E8EAF6"}}>{c.name.charAt(0).toUpperCase()}</div>
+                        <div>
+                          <div style={{fontWeight:600,color:"#E8EAF6",fontSize:14}}>{c.name}</div>
+                          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{c.mobile} · {c.propertyType}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <a href={`tel:${c.mobile.replace(/\D/g,"")}`} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px",borderRadius:10,background:"rgba(99,179,237,0.1)",border:"1px solid rgba(99,179,237,0.25)",color:"#63B3ED",fontSize:13,fontWeight:600,textDecoration:"none"}}>{Icon.phone} Call</a>
+                      <a href={`https://wa.me/${c.mobile.replace(/\D/g,"")}?text=${encodeURIComponent(`🎂 Many Happy Returns of the day, ${c.name}! Wishing you a wonderful birthday! 🎉 – Your Real Estate Partner`)}`} target="_blank" rel="noreferrer" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px",borderRadius:10,background:"rgba(37,211,102,0.1)",border:"1px solid rgba(37,211,102,0.25)",color:"#25D366",fontSize:13,fontWeight:600,textDecoration:"none"}}>{Icon.whatsapp} Wish</a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSection==="broadcast" && (
+        <div className="fade-in">
+          <div className="card" style={{marginBottom:14}}>
+            <div className="section-title">WhatsApp Templates</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+              {db.waTemplates.map(t=>(
+                <div key={t.id} onClick={()=>{setSelectedTemplate(t.id);setCustomMsg("");}} style={{padding:"10px 12px",borderRadius:10,border:`1px solid ${selectedTemplate===t.id?"rgba(183,148,246,0.5)":"rgba(255,255,255,0.08)"}`,background:selectedTemplate===t.id?"rgba(183,148,246,0.08)":"transparent",cursor:"pointer",transition:"all .2s"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{fontWeight:600,color:"#E8EAF6",fontSize:13}}>{t.name}</div>
+                    {selectedTemplate===t.id&&<div style={{width:16,height:16,borderRadius:"50%",background:"#B794F6",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff"}}>{Icon.check}</div>}
+                  </div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginTop:4,lineHeight:1.5}}>{t.text.slice(0,80)}...</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div className="label">Or type a custom message</div>
+              <textarea value={customMsg} onChange={e=>{setCustomMsg(e.target.value);setSelectedTemplate(null);}} placeholder="Type your message... Use {name} to personalize" className="input-field" rows={3} style={{resize:"none"}} />
+            </div>
+          </div>
+
+          <div className="card" style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div className="section-title" style={{marginBottom:0}}>Select Customers</div>
+              <button onClick={()=>setSelectedCustomers(allCustomers.length===selectedCustomers.length?[]:allCustomers.map(c=>c.id))} style={{fontSize:11,color:"#B794F6",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>
+                {allCustomers.length===selectedCustomers.length?"Deselect All":"Select All"}
+              </button>
+            </div>
+            <div style={{position:"relative",marginBottom:10}}>
+              <div style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"rgba(255,255,255,0.4)"}}>{Icon.search}</div>
+              <input value={searchBroadcast} onChange={e=>setSearchBroadcast(e.target.value)} placeholder="Search customers..." className="input-field" style={{paddingLeft:36}} />
+            </div>
+            <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
+              {allCustomers.length===0&&<div style={{textAlign:"center",padding:20,color:"rgba(255,255,255,0.3)",fontSize:13}}>No customers yet.</div>}
+              {allCustomers.map(c=>{
+                const sel=selectedCustomers.includes(c.id);
+                return (
+                  <div key={c.id} onClick={()=>toggleCustomer(c.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:10,cursor:"pointer",background:sel?"rgba(183,148,246,0.08)":"transparent",border:`1px solid ${sel?"rgba(183,148,246,0.3)":"rgba(255,255,255,0.06)"}`,transition:"all .15s"}}>
+                    <div style={{width:18,height:18,borderRadius:5,border:`2px solid ${sel?"#B794F6":"rgba(255,255,255,0.2)"}`,background:sel?"#B794F6":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
+                      {sel&&<svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" style={{width:11,height:11}}><polyline points="20,6 9,17 4,12"/></svg>}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:600,color:"#E8EAF6",fontSize:13}}>{c.name}</div>
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{c.mobile}</div>
+                    </div>
+                    {sel&&(
+                      <a href={`https://wa.me/${c.mobile.replace(/\D/g,"")}?text=${encodeURIComponent(buildMsg(c))}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{padding:"5px 8px",borderRadius:8,background:"rgba(37,211,102,0.1)",border:"1px solid rgba(37,211,102,0.2)",color:"#25D366",display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:600,textDecoration:"none"}}>
+                        {Icon.whatsapp} Send
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Real Estate CRM",
+  "short_name": "RE CRM",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0E1A",
+  "theme_color": "#0A0E1A",
+  "description": "Real Estate CRM for agents",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/128/emoji_u1f3e1.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    }
+  ]
+}
