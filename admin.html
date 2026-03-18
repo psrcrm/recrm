@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+  <title>PS RE CRM — Admin Panel</title>
+  <meta name="theme-color" content="#0A0E1A"/>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'DM Sans',sans-serif;background:#0A0E1A;color:#E8EAF6;min-height:100vh}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:rgba(183,148,246,0.3);border-radius:4px}
+    .inp{width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:11px 14px;color:#E8EAF6;font-size:14px;outline:none;transition:all .2s;font-family:inherit}
+    .inp:focus{border-color:rgba(183,148,246,0.6);background:rgba(183,148,246,0.05)}
+    .inp::placeholder{color:rgba(255,255,255,0.25)}
+    select.inp option{background:#1A1F35}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 16px;border-radius:11px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .2s;font-family:inherit;white-space:nowrap}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .btn-p{background:linear-gradient(135deg,#B794F6,#7C5CBF);color:#fff;box-shadow:0 2px 12px rgba(183,148,246,0.3)}
+    .btn-p:hover:not(:disabled){opacity:.9;transform:translateY(-1px)}
+    .btn-d{background:rgba(252,129,74,0.12);color:#FC814A;border:1px solid rgba(252,129,74,0.25)}
+    .btn-s{background:rgba(104,211,145,0.12);color:#68D391;border:1px solid rgba(104,211,145,0.25)}
+    .btn-g{background:rgba(255,255,255,0.05);color:#C4C8E0;border:1px solid rgba(255,255,255,0.1)}
+    .btn-g:hover{background:rgba(255,255,255,0.08)}
+    .card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:18px}
+    .pill{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:600}
+    .lbl{font-size:12px;font-weight:500;color:rgba(255,255,255,0.4);margin-bottom:5px}
+    .err-msg{font-size:11px;color:#FC814A;margin-top:4px;padding-left:2px}
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px}
+    .modal{background:#131829;border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:24px;width:100%;max-width:460px;max-height:92vh;overflow-y:auto}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}.fade-in{animation:fadeIn .25s ease}
+    @keyframes slideUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}.su{animation:slideUp .35s cubic-bezier(.16,1,.3,1) forwards}
+    @keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin .8s linear infinite}
+    .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:11px 22px;border-radius:12px;font-size:13px;font-weight:600;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.4);animation:fadeIn .3s ease;white-space:nowrap}
+    code{font-family:monospace;font-size:11px;background:rgba(255,255,255,0.07);padding:2px 7px;border-radius:5px;color:#B794F6}
+    pre{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px;font-size:11px;color:rgba(255,255,255,0.5);overflow-x:auto;line-height:1.7;font-family:monospace;white-space:pre-wrap;max-height:220px;overflow-y:auto}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="react,env">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ── CONSTANTS ────────────────────────────────────────────────
+const ADMIN_URL_KEY     = "psrcrm_admin_url";
+const ADMIN_SESS_KEY    = "psrcrm_admin_sess";
+const ADMIN_PASSWORD    = "psrcrm@dmin1999"; // ← CHANGE THIS before deploying!
+
+const MASTER_SCRIPT_CODE = `// ═══════════════════════════════════════════════════════════════
+// PS RE CRM — MASTER ADMIN Apps Script
+// Step 1: sheets.google.com → New sheet → Name it: RE_CRM_MASTER
+// Step 2: Extensions → Apps Script → Delete code → Paste this
+// Step 3: Deploy → New Deployment → Web App
+//         Execute as: Me | Who can access: Anyone → Deploy → Authorize
+// Step 4: Copy Web App URL → paste in Admin Panel login
+// ═══════════════════════════════════════════════════════════════
+
+const AGENTS_SHEET = "Agents";
+const LOG_SHEET    = "ActivityLog";
+
+function doGet(e) {
+  const action = e.parameter.action;
+  if (action === "getAgents") return jsonResp(getAgents());
+  if (action === "verifyPin") return jsonResp(verifyPin(e.parameter.pin));
+  return jsonResp({ error: "Unknown action" });
+}
+
+function doPost(e) {
+  try {
+    const d = JSON.parse(e.postData.contents);
+    if (d.action === "addAgent")    { addAgent(d);    return jsonResp({ success: true }); }
+    if (d.action === "updateAgent") { updateAgent(d); return jsonResp({ success: true }); }
+    if (d.action === "deleteAgent") { deleteAgent(d); return jsonResp({ success: true }); }
+    return jsonResp({ error: "Unknown" });
+  } catch(err) { return jsonResp({ error: err.message }); }
+}
+
+function jsonResp(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSheet(name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+const HDRS = ["id","name","mobile","email","pin","status","plan",
+              "paidUntil","agentSheetUrl","customerCount","followupCount","createdAt","notes"];
+
+function ensureHdrs() {
+  const s = getSheet(AGENTS_SHEET);
+  if (s.getRange(1,1).getValue() !== "id") {
+    s.getRange(1,1,1,HDRS.length).setValues([HDRS]).setFontWeight("bold");
+    s.setFrozenRows(1);
+  }
+}
+
+function getAgents() {
+  ensureHdrs();
+  const s = getSheet(AGENTS_SHEET);
+  const rows = s.getDataRange().getValues();
+  if (rows.length <= 1) return [];
+  const h = rows[0];
+  return rows.slice(1).map(row => {
+    const obj = {};
+    h.forEach((k,i) => { obj[k] = row[i] !== undefined ? String(row[i]) : ""; });
+    return obj;
+  });
+}
+
+function verifyPin(pin) {
+  const agents = getAgents();
+  const agent  = agents.find(a => a.pin === String(pin) && a.status === "active");
+  if (!agent) return { success: false };
+  return { success: true, agent };
+}
+
+function addAgent(d) {
+  ensureHdrs();
+  const s = getSheet(AGENTS_SHEET);
+  s.appendRow(HDRS.map(h => d[h] !== undefined ? d[h] : ""));
+  s.autoResizeColumns(1, HDRS.length);
+  getSheet(LOG_SHEET).appendRow([new Date().toLocaleString(),"ADD",d.name,d.pin]);
+}
+
+function updateAgent(d) {
+  ensureHdrs();
+  const s = getSheet(AGENTS_SHEET);
+  const rows = s.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(d.id)) {
+      HDRS.forEach((h, col) => { if (d[h] !== undefined) s.getRange(i+1,col+1).setValue(d[h]); });
+      getSheet(LOG_SHEET).appendRow([new Date().toLocaleString(),"UPDATE",d.id]);
+      return;
+    }
+  }
+}
+
+function deleteAgent(d) {
+  const s = getSheet(AGENTS_SHEET);
+  const rows = s.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(d.id)) {
+      s.deleteRow(i + 1);
+      getSheet(LOG_SHEET).appendRow([new Date().toLocaleString(),"DELETE",d.id,d.name||""]);
+      return;
+    }
+  }
+}`;
+
+// ── HELPERS ──────────────────────────────────────────────────
+const genId  = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+const genPin = () => String(Math.floor(1000 + Math.random() * 9000));
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}); }
+  catch { return iso; }
+};
+const today = () => new Date().toISOString().split("T")[0];
+
+const getUrl  = () => localStorage.getItem(ADMIN_URL_KEY)||"";
+const saveUrl = (u) => localStorage.setItem(ADMIN_URL_KEY, u);
+
+const getSess  = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(ADMIN_SESS_KEY)||"null");
+    if (!s) return null;
+    if (Date.now()-s.t > 8*60*60*1000) { localStorage.removeItem(ADMIN_SESS_KEY); return null; }
+    return s;
+  } catch { return null; }
+};
+const saveSess  = () => localStorage.setItem(ADMIN_SESS_KEY, JSON.stringify({t:Date.now()}));
+const clearSess = () => localStorage.removeItem(ADMIN_SESS_KEY);
+
+// API to master sheet
+const api = async (action, payload={}) => {
+  const url = getUrl();
+  if (!url) throw new Error("No Script URL");
+  if (action === "getAgents" || action === "verifyPin") {
+    const q = action==="verifyPin" ? `?action=verifyPin&pin=${payload.pin}&t=${Date.now()}` : `?action=getAgents&t=${Date.now()}`;
+    const res = await fetch(url+q);
+    if (!res.ok) throw new Error("Fetch failed");
+    return res.json();
+  }
+  await fetch(url, {
+    method:"POST", mode:"no-cors",
+    headers:{"Content-Type":"text/plain"},
+    body: JSON.stringify({action,...payload})
+  });
+  return { success: true };
+};
+
+// ── SVG ICONS ────────────────────────────────────────────────
+const Ic = {
+  plus:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:14,height:14}}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  edit:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:13,height:13}}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  trash:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:13,height:13}}><polyline points="3,6 5,6 21,6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>,
+  lock:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:13,height:13}}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
+  check:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{width:12,height:12}}><polyline points="20,6 9,17 4,12"/></svg>,
+  close:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:16,height:16}}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  copy:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:13,height:13}}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
+  refresh: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:14,height:14}}><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>,
+  logout:  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:13,height:13}}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+  wa:      <svg viewBox="0 0 24 24" fill="currentColor" style={{width:13,height:13}}><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>,
+  spin:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="spin" style={{width:16,height:16}}><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>,
+};
+
+// ────────────────────────────────────────────────────────────
+// ROOT
+// ────────────────────────────────────────────────────────────
+function AdminApp() {
+  const [sess, setSess]   = useState(() => getSess());
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),3200); };
+
+  return (
+    <div>
+      {!sess
+        ? <LoginScreen onLogin={() => { saveSess(); setSess({t:Date.now()}); }} showToast={showToast}/>
+        : <Dashboard   onLogout={() => { clearSess(); setSess(null); }} showToast={showToast}/>
+      }
+      {toast && (
+        <div className="toast" style={{background: toast.type==="success"?"rgba(104,211,145,0.95)":toast.type==="info"?"rgba(183,148,246,0.95)":"rgba(252,129,74,0.95)", color:"#000"}}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// LOGIN SCREEN
+// ────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin, showToast }) {
+  const [scriptUrl, setScriptUrl] = useState(getUrl());
+  const [password,  setPassword]  = useState("");
+  const [showPass,  setShowPass]  = useState(false);
+  const [err,       setErr]       = useState("");
+  const [copied,    setCopied]    = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+
+  const handleLogin = () => {
+    setErr("");
+    if (!scriptUrl.trim()) { setErr("Paste your Master Sheet Script URL first"); return; }
+    if (password !== ADMIN_PASSWORD) { setErr("Wrong admin password"); return; }
+    saveUrl(scriptUrl.trim());
+    onLogin();
+  };
+
+  const copyScript = () => {
+    navigator.clipboard.writeText(MASTER_SCRIPT_CODE);
+    setCopied(true);
+    setTimeout(()=>setCopied(false), 2500);
+    showToast("Master Script copied! 📋");
+  };
+
+  return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{width:"100%",maxWidth:420}} className="su">
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{width:76,height:76,borderRadius:24,background:"linear-gradient(135deg,#B794F6,#7C5CBF)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:34,margin:"0 auto 14px",boxShadow:"0 8px 32px rgba(183,148,246,0.4)"}}>👑</div>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"#E8EAF6"}}>Admin Panel</div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,0.4)",marginTop:5}}>PS RE CRM — Agent Control Center</div>
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {/* Script URL */}
+          <div>
+            <div className="lbl">Master Sheet Script URL</div>
+            <input value={scriptUrl} onChange={e=>setScriptUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="inp"/>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.3)",marginTop:5}}>Don't have it yet? See setup guide below ↓</div>
+          </div>
+          {/* Password */}
+          <div>
+            <div className="lbl">Admin Password</div>
+            <div style={{position:"relative"}}>
+              <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Enter admin password" className="inp" style={{paddingRight:46}}/>
+              <button onClick={()=>setShowPass(!showPass)} style={{position:"absolute",right:13,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.4)",fontSize:17}}>{showPass?"🙈":"👁️"}</button>
+            </div>
+          </div>
+          {err && <div style={{background:"rgba(252,129,74,0.1)",border:"1px solid rgba(252,129,74,0.25)",borderRadius:10,padding:"9px 13px",fontSize:12,color:"#FC814A"}}>⚠️ {err}</div>}
+          <button onClick={handleLogin} className="btn btn-p" style={{width:"100%",padding:"14px",fontSize:14}}>🔓 Sign In to Admin</button>
+
+          {/* Setup toggle */}
+          <button onClick={()=>setShowSetup(!showSetup)} className="btn btn-g" style={{width:"100%",padding:"11px"}}>
+            {showSetup?"▲ Hide":"▼ Show"} One-Time Setup Guide
+          </button>
+
+          {showSetup && (
+            <div style={{background:"rgba(0,0,0,0.3)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:14,padding:"16px",display:"flex",flexDirection:"column",gap:12}} className="fade-in">
+              <div style={{fontWeight:700,color:"#B794F6",fontSize:13}}>🛠️ First-Time Setup (5 minutes)</div>
+              {[
+                ["1","Go to sheets.google.com → create new sheet → name it RE_CRM_MASTER"],
+                ["2","Inside that sheet → Extensions → Apps Script → delete all default code"],
+                ["3","Click 'Copy Master Script' button below → paste in Apps Script → Save 💾"],
+                ["4","Deploy → New Deployment → Web App → Execute as: Me → Anyone → Deploy → Authorize"],
+                ["5","Copy the Web App URL → paste it in the field above → Sign In"],
+              ].map(([n,t])=>(
+                <div key={n} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <div style={{width:22,height:22,borderRadius:"50%",background:"rgba(183,148,246,0.2)",color:"#B794F6",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
+                  <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",lineHeight:1.6}}>{t}</div>
+                </div>
+              ))}
+              <button onClick={copyScript} className="btn btn-p" style={{width:"100%",padding:"11px",marginTop:4,background:copied?"linear-gradient(135deg,#68D391,#38A169)":undefined}}>
+                {Ic.copy} {copied?"✅ Copied! Paste in Apps Script":"Copy Master Script Code"}
+              </button>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",textAlign:"center"}}>
+                Default admin password: <code>psrcrm@admin2024</code><br/>Change it in admin.html source before going live
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// MAIN DASHBOARD
+// ────────────────────────────────────────────────────────────
+function Dashboard({ onLogout, showToast }) {
+  const [agents,      setAgents]      = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [search,      setSearch]      = useState("");
+  const [filterSt,    setFilterSt]    = useState("all");
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [editAgent,   setEditAgent]   = useState(null);
+  const [confirmDel,  setConfirmDel]  = useState(null);
+
+  const loadAgents = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api("getAgents");
+      setAgents(Array.isArray(data) ? data : []);
+    } catch(e) {
+      showToast("Failed to load — check Script URL", "error");
+      setAgents([]);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAgents(); }, []);
+
+  const doActivate   = async (a) => { await api("updateAgent",{id:a.id,status:"active"});   showToast(`${a.name} activated ✅`);   loadAgents(); };
+  const doDeactivate = async (a) => { await api("updateAgent",{id:a.id,status:"inactive"}); showToast(`${a.name} deactivated`);    loadAgents(); };
+  const doDelete     = async (a) => { await api("deleteAgent",{id:a.id,name:a.name});       showToast(`${a.name} deleted`,"error"); loadAgents(); setConfirmDel(null); };
+
+  const doResetPin = async (a) => {
+    const newPin = genPin();
+    await api("updateAgent", {id:a.id, pin:newPin});
+    showToast(`New PIN for ${a.name}: ${newPin}  (tap to copy)`, "info");
+    navigator.clipboard.writeText(newPin);
+    loadAgents();
+  };
+
+  const copyWA = (a) => {
+    const msg = `🏡 *PS RE CRM — Access Ready!*\n\nHello ${a.name}! 👋\n\nYour CRM login details:\n\n🔗 *URL:* https://psrcrm.netlify.app\n🔢 *Your PIN:* ${a.pin}\n\nOpen the URL → Enter your PIN → Start managing your leads!\n\nFor support WhatsApp anytime. 💜\n— PS RE CRM Team`;
+    navigator.clipboard.writeText(msg);
+    showToast("WhatsApp message copied! 📱");
+  };
+
+  const filtered = agents.filter(a => {
+    const q = search.toLowerCase();
+    const matchQ = !q || a.name?.toLowerCase().includes(q) || a.mobile?.includes(q) || a.email?.toLowerCase().includes(q);
+    const matchSt = filterSt==="all" || a.status===filterSt;
+    return matchQ && matchSt;
+  });
+
+  const active   = agents.filter(a=>a.status==="active").length;
+  const inactive = agents.filter(a=>a.status==="inactive").length;
+  const revenue  = active * 499;
+
+  return (
+    <div style={{maxWidth:1100,margin:"0 auto",padding:"0 20px 60px"}}>
+
+      {/* ── TOPBAR ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 0 20px",borderBottom:"1px solid rgba(255,255,255,0.07)",marginBottom:22}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:44,height:44,borderRadius:14,background:"linear-gradient(135deg,#B794F6,#7C5CBF)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>👑</div>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"#E8EAF6"}}>PS RE CRM Admin</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>Agent Management — {today()}</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={loadAgents} className="btn btn-g" style={{padding:"8px 12px"}}>{loading ? Ic.spin : Ic.refresh} Refresh</button>
+          <button onClick={onLogout}   className="btn btn-g" style={{padding:"8px 12px",color:"#FC814A"}}>{Ic.logout} Logout</button>
+        </div>
+      </div>
+
+      {/* ── STATS ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
+        {[
+          {label:"Total Agents", value:agents.length, color:"#B794F6", bg:"rgba(183,148,246,0.1)", emoji:"👥"},
+          {label:"Active",       value:active,         color:"#68D391", bg:"rgba(104,211,145,0.1)", emoji:"✅"},
+          {label:"Inactive",     value:inactive,       color:"#FC814A", bg:"rgba(252,129,74,0.1)",  emoji:"🔴"},
+          {label:"Monthly Rev.", value:`₹${revenue.toLocaleString("en-IN")}`, color:"#F6AD55", bg:"rgba(246,173,85,0.1)", emoji:"💰"},
+        ].map((s,i)=>(
+          <div key={i} className="card su" style={{textAlign:"center",padding:"16px 10px",background:s.bg,border:`1px solid ${s.color}25`}}>
+            <div style={{fontSize:24,marginBottom:6}}>{s.emoji}</div>
+            <div style={{fontSize:22,fontWeight:700,color:s.color,lineHeight:1}}>{s.value}</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginTop:4,fontWeight:500}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── TOOLBAR ── */}
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍  Search by name, mobile or email..." className="inp" style={{flex:1,minWidth:180}}/>
+        <select value={filterSt} onChange={e=>setFilterSt(e.target.value)} className="inp" style={{width:150}}>
+          <option value="all">All Agents</option>
+          <option value="active">Active Only</option>
+          <option value="inactive">Inactive Only</option>
+        </select>
+        <button onClick={()=>setShowAdd(true)} className="btn btn-p">{Ic.plus} Add Agent</button>
+      </div>
+
+      {/* ── AGENT LIST ── */}
+      {loading ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:"rgba(255,255,255,0.35)"}}>
+          <div style={{fontSize:36,marginBottom:12}}>⏳</div>
+          Loading agents from Google Sheets...
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="card" style={{textAlign:"center",padding:"50px 20px"}}>
+          <div style={{fontSize:44,marginBottom:12}}>👥</div>
+          <div style={{fontWeight:600,fontSize:16,marginBottom:8}}>{agents.length===0?"No agents yet":"No matching agents"}</div>
+          <div style={{color:"rgba(255,255,255,0.4)",fontSize:13,marginBottom:20}}>
+            {agents.length===0?"Add your first agent to get started":"Try a different search or filter"}
+          </div>
+          {agents.length===0 && <button onClick={()=>setShowAdd(true)} className="btn btn-p">{Ic.plus} Add First Agent</button>}
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filtered.map((a,i)=>(
+            <AgentCard key={a.id||i} agent={a}
+              onActivate={()=>doActivate(a)}
+              onDeactivate={()=>doDeactivate(a)}
+              onResetPin={()=>doResetPin(a)}
+              onEdit={()=>setEditAgent(a)}
+              onDelete={()=>setConfirmDel(a)}
+              onCopyWA={()=>copyWA(a)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── MODALS ── */}
+      {showAdd     && <AddAgentModal    onClose={()=>setShowAdd(false)}    onSaved={()=>{setShowAdd(false);   loadAgents();showToast("Agent added! ✅");}}  showToast={showToast}/>}
+      {editAgent   && <EditAgentModal   agent={editAgent} onClose={()=>setEditAgent(null)}  onSaved={()=>{setEditAgent(null);  loadAgents();showToast("Agent updated ✅");}} showToast={showToast}/>}
+      {confirmDel  && (
+        <div className="overlay fade-in" onClick={()=>setConfirmDel(null)}>
+          <div className="modal" style={{maxWidth:360,textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:44,marginBottom:12}}>🗑️</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#E8EAF6",marginBottom:8}}>Delete Agent?</div>
+            <div style={{fontSize:13,color:"rgba(255,255,255,0.5)",marginBottom:24,lineHeight:1.6}}>
+              This will permanently remove <strong style={{color:"#E8EAF6"}}>{confirmDel.name}</strong> from the system.<br/>Their Google Sheet data will not be deleted.
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setConfirmDel(null)} className="btn btn-g" style={{flex:1,padding:"12px"}}>Cancel</button>
+              <button onClick={()=>doDelete(confirmDel)} className="btn btn-d" style={{flex:1,padding:"12px"}}>Yes, Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// AGENT CARD
+// ────────────────────────────────────────────────────────────
+function AgentCard({ agent:a, onActivate, onDeactivate, onResetPin, onEdit, onDelete, onCopyWA }) {
+  const isActive = a.status==="active";
+  return (
+    <div className="card su" style={{borderLeft:`4px solid ${isActive?"#68D391":"#FC814A"}`,display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
+      {/* Avatar */}
+      <div style={{width:48,height:48,borderRadius:"50%",background:`linear-gradient(135deg,${isActive?"rgba(104,211,145,0.25)":"rgba(252,129,74,0.2)"},rgba(183,148,246,0.15))`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#E8EAF6",fontSize:19,flexShrink:0}}>
+        {(a.name||"?").charAt(0).toUpperCase()}
+      </div>
+      {/* Info */}
+      <div style={{flex:1,minWidth:150}}>
+        <div style={{fontWeight:700,color:"#E8EAF6",fontSize:15,marginBottom:3}}>{a.name||"—"}</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>📱 {a.mobile||"—"}{a.email?`  ✉️ ${a.email}`:""}</div>
+        <div style={{display:"flex",gap:6,marginTop:7,flexWrap:"wrap",alignItems:"center"}}>
+          <span className="pill" style={{background:isActive?"rgba(104,211,145,0.15)":"rgba(252,129,74,0.15)",color:isActive?"#68D391":"#FC814A",border:`1px solid ${isActive?"#68D391":"#FC814A"}`}}>
+            {isActive?"● Active":"○ Inactive"}
+          </span>
+          <span className="pill" style={{background:"rgba(183,148,246,0.1)",color:"#B794F6",border:"1px solid rgba(183,148,246,0.2)"}}>{a.plan||"Pro"}</span>
+          {a.paidUntil && <span style={{fontSize:11,color:"rgba(255,255,255,0.3)"}}>Paid until {fmtDate(a.paidUntil)}</span>}
+          {a.notes && <span style={{fontSize:11,color:"rgba(255,255,255,0.3)",fontStyle:"italic"}}>📝 {a.notes}</span>}
+        </div>
+      </div>
+      {/* PIN */}
+      <div style={{textAlign:"center",padding:"10px 16px",background:"rgba(183,148,246,0.06)",borderRadius:12,border:"1px solid rgba(183,148,246,0.15)"}}>
+        <div style={{fontSize:9,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:1.5,marginBottom:3}}>LOGIN PIN</div>
+        <div style={{fontSize:26,fontWeight:700,color:"#B794F6",letterSpacing:6,lineHeight:1}}>{a.pin||"—"}</div>
+      </div>
+      {/* Stats */}
+      <div style={{display:"flex",gap:14,textAlign:"center"}}>
+        <div><div style={{fontSize:18,fontWeight:700,color:"#63B3ED"}}>{a.customerCount||0}</div><div style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>Customers</div></div>
+        <div><div style={{fontSize:18,fontWeight:700,color:"#68D391"}}>{a.followupCount||0}</div><div style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>Follow-ups</div></div>
+      </div>
+      {/* Actions */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        <button onClick={onCopyWA}  className="btn" style={{padding:"7px 10px",background:"rgba(37,211,102,0.1)",color:"#25D366",border:"1px solid rgba(37,211,102,0.2)"}} title="Copy WhatsApp message">{Ic.wa}</button>
+        <button onClick={onResetPin} className="btn btn-g" style={{padding:"7px 10px"}} title="Reset PIN">{Ic.lock}</button>
+        <button onClick={onEdit}     className="btn btn-g" style={{padding:"7px 10px"}} title="Edit">{Ic.edit}</button>
+        {isActive
+          ? <button onClick={onDeactivate} className="btn btn-d" style={{padding:"7px 12px"}}>Deactivate</button>
+          : <button onClick={onActivate}   className="btn btn-s" style={{padding:"7px 12px"}}>Activate</button>
+        }
+        <button onClick={onDelete}   className="btn btn-d" style={{padding:"7px 10px"}} title="Delete agent">{Ic.trash}</button>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// ADD AGENT MODAL
+// ────────────────────────────────────────────────────────────
+function AddAgentModal({ onClose, onSaved, showToast }) {
+  const [name,         setName]         = useState("");
+  const [mobile,       setMobile]       = useState("");
+  const [email,        setEmail]        = useState("");
+  const [plan,         setPlan]         = useState("Pro");
+  const [paidUntil,    setPaidUntil]    = useState("");
+  const [agentSheetUrl,setAgentSheetUrl]= useState("");
+  const [notes,        setNotes]        = useState("");
+  const [pin,          setPin]          = useState(genPin());
+  const [loading,      setLoading]      = useState(false);
+  const [errors,       setErrors]       = useState({});
+
+  const validate = () => {
+    const e = {};
+    if (!name.trim())   e.name   = "Required";
+    if (!mobile.trim()) e.mobile = "Required";
+    if (!agentSheetUrl.trim()) e.url = "Required — agent's personal Apps Script URL";
+    return e;
+  };
+
+  const handleSave = async () => {
+    const e = validate();
+    if (Object.keys(e).length) { setErrors(e); return; }
+    setLoading(true);
+    try {
+      await api("addAgent", {
+        id: genId(), name:name.trim(), mobile:mobile.trim(),
+        email:email.trim(), plan, paidUntil,
+        agentSheetUrl:agentSheetUrl.trim(), pin, notes:notes.trim(),
+        status:"active", customerCount:0, followupCount:0,
+        createdAt: new Date().toISOString(),
+      });
+      onSaved();
+    } catch { showToast("Save failed — check Script URL", "error"); }
+    setLoading(false);
+  };
+
+  const waPreview = name && pin ? `🏡 *PS RE CRM — Access Ready!*\n\nHello ${name}! 👋\n\n🔗 *URL:* https://psrcrm.netlify.app\n🔢 *Your PIN:* ${pin}\n\nOpen URL → Enter PIN → Start! 💪` : "";
+
+  return (
+    <div className="overlay fade-in" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#E8EAF6"}}>➕ Add New Agent</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.5)"}}>{Ic.close}</button>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:13}}>
+          <div>
+            <div className="lbl">Full Name *</div>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Rajesh Kumar" className="inp" style={errors.name?{borderColor:"#FC814A"}:{}}/>
+            {errors.name && <div className="err-msg">{errors.name}</div>}
+          </div>
+          <div>
+            <div className="lbl">Mobile Number *</div>
+            <input type="tel" value={mobile} onChange={e=>setMobile(e.target.value)} placeholder="+91 9876543210" className="inp" style={errors.mobile?{borderColor:"#FC814A"}:{}}/>
+            {errors.mobile && <div className="err-msg">{errors.mobile}</div>}
+          </div>
+          <div>
+            <div className="lbl">Email (optional)</div>
+            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="rajesh@email.com" className="inp"/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <div className="lbl">Plan</div>
+              <select value={plan} onChange={e=>setPlan(e.target.value)} className="inp">
+                <option value="Free">Free</option>
+                <option value="Pro">Pro — ₹499/mo</option>
+              </select>
+            </div>
+            <div>
+              <div className="lbl">Paid Until</div>
+              <input type="date" value={paidUntil} onChange={e=>setPaidUntil(e.target.value)} className="inp"/>
+            </div>
+          </div>
+          <div>
+            <div className="lbl">Agent's Apps Script URL *</div>
+            <input value={agentSheetUrl} onChange={e=>setAgentSheetUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="inp" style={errors.url?{borderColor:"#FC814A"}:{}}/>
+            {errors.url && <div className="err-msg">{errors.url}</div>}
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.3)",marginTop:5,lineHeight:1.6}}>
+              Agent creates their own Google Sheet → deploys the CRM Apps Script → sends you the Web App URL. You paste it here.
+            </div>
+          </div>
+          <div>
+            <div className="lbl">Login PIN (4 digits)</div>
+            <div style={{display:"flex",gap:10}}>
+              <input value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))} className="inp" style={{letterSpacing:10,fontSize:20,fontWeight:700,textAlign:"center"}}/>
+              <button onClick={()=>setPin(genPin())} className="btn btn-g" style={{flexShrink:0,padding:"10px 14px"}}>🎲 Random</button>
+            </div>
+          </div>
+          <div>
+            <div className="lbl">Notes (optional — e.g. payment info)</div>
+            <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Paid via GPay, ref #1234" className="inp"/>
+          </div>
+
+          {/* WA Message Preview */}
+          {waPreview && (
+            <div style={{background:"rgba(37,211,102,0.05)",border:"1px solid rgba(37,211,102,0.15)",borderRadius:12,padding:"13px 14px"}}>
+              <div style={{fontSize:11,fontWeight:600,color:"#25D366",marginBottom:8}}>📱 WhatsApp message to send this agent:</div>
+              <pre style={{fontSize:11,color:"rgba(255,255,255,0.55)",lineHeight:1.8,background:"transparent",border:"none",padding:0,whiteSpace:"pre-wrap"}}>{waPreview}</pre>
+              <button onClick={()=>{navigator.clipboard.writeText(waPreview);showToast("Copied! 📋");}} className="btn" style={{width:"100%",marginTop:10,padding:"8px",background:"rgba(37,211,102,0.1)",color:"#25D366",border:"1px solid rgba(37,211,102,0.2)",fontSize:12}}>
+                {Ic.copy} Copy Message
+              </button>
+            </div>
+          )}
+
+          <button onClick={handleSave} disabled={loading} className="btn btn-p" style={{width:"100%",padding:"13px",fontSize:14,marginTop:4}}>
+            {loading ? "Saving..." : `${Ic.check} Add Agent & Activate`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// EDIT AGENT MODAL
+// ────────────────────────────────────────────────────────────
+function EditAgentModal({ agent, onClose, onSaved, showToast }) {
+  const [name,      setName]      = useState(agent.name||"");
+  const [mobile,    setMobile]    = useState(agent.mobile||"");
+  const [email,     setEmail]     = useState(agent.email||"");
+  const [plan,      setPlan]      = useState(agent.plan||"Pro");
+  const [paidUntil, setPaidUntil] = useState(agent.paidUntil||"");
+  const [sheetUrl,  setSheetUrl]  = useState(agent.agentSheetUrl||"");
+  const [notes,     setNotes]     = useState(agent.notes||"");
+  const [loading,   setLoading]   = useState(false);
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      await api("updateAgent",{id:agent.id,name,mobile,email,plan,paidUntil,agentSheetUrl:sheetUrl,notes});
+      onSaved();
+    } catch { showToast("Update failed","error"); }
+    setLoading(false);
+  };
+
+  return (
+    <div className="overlay fade-in" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#E8EAF6"}}>✏️ Edit — {agent.name}</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.5)"}}>{Ic.close}</button>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:13}}>
+          <div><div className="lbl">Name</div><input value={name} onChange={e=>setName(e.target.value)} className="inp"/></div>
+          <div><div className="lbl">Mobile</div><input value={mobile} onChange={e=>setMobile(e.target.value)} className="inp"/></div>
+          <div><div className="lbl">Email</div><input value={email} onChange={e=>setEmail(e.target.value)} className="inp"/></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div><div className="lbl">Plan</div>
+              <select value={plan} onChange={e=>setPlan(e.target.value)} className="inp">
+                <option value="Free">Free</option><option value="Pro">Pro</option>
+              </select>
+            </div>
+            <div><div className="lbl">Paid Until</div><input type="date" value={paidUntil} onChange={e=>setPaidUntil(e.target.value)} className="inp"/></div>
+          </div>
+          <div><div className="lbl">Agent's Script URL</div><input value={sheetUrl} onChange={e=>setSheetUrl(e.target.value)} placeholder="https://script.google.com/..." className="inp"/></div>
+          <div><div className="lbl">Notes</div><input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Payment info, remarks..." className="inp"/></div>
+          <button onClick={handleSave} disabled={loading} className="btn btn-p" style={{width:"100%",padding:"13px",marginTop:4}}>
+            {loading?"Saving...": `${Ic.check} Save Changes`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MOUNT ────────────────────────────────────────────────────
+const root = document.getElementById("root");
+ReactDOM.createRoot(root).render(React.createElement(AdminApp));
+</script>
+</body>
+</html>
