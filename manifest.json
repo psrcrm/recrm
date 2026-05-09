@@ -1,0 +1,43 @@
+{
+  "name": "PSR Real Estate CRM",
+  "short_name": "PSR CRM",
+  "description": "Smart CRM for Real Estate Agents — Track leads, follow-ups & close more deals",
+  "start_url": "/recrm/",
+  "scope": "/recrm/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0E1A",
+  "theme_color": "#B794F6",
+  "lang": "en",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/128/emoji_u1f3e1.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/512/emoji_u1f3e1.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add Lead",
+      "short_name": "Add Lead",
+      "description": "Quickly add a new lead",
+      "url": "/recrm/?action=add_lead",
+      "icons": [{ "src": "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/128/emoji_u1f4cb.png", "sizes": "128x128" }]
+    },
+    {
+      "name": "Today's Hits",
+      "short_name": "Hit List",
+      "description": "View today's follow-up list",
+      "url": "/recrm/?action=hitlist",
+      "icons": [{ "src": "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/png/128/emoji_u1f3af.png", "sizes": "128x128" }]
+    }
+  ]
+}
