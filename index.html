@@ -438,6 +438,7 @@ const DEFAULT_DB = {
   propertyTypes: ["Plot", "Flat", "Villa", "Farmland", "Commercial"],
   enquiryTypes: ["Hot", "Warm", "Cold"],
   followupTypes: ["Regular Follow-up", "Site Visit", "Negotiation", "Booking", "Registration", "Post-Sale"],
+  targets: { calls: 50, followups: 10, newLeads: 5 },
   waTemplates: [
     { id: "t1", name: "Birthday Wish", text: "🎂 Many Happy Returns of the day, {name}! Wishing you a wonderful birthday filled with joy and success. \u2013 Your Real Estate Partner" },
     { id: "t2", name: "New Listing Alert", text: "Hi {name}! We have an exciting new property that matches your requirements. Shall I share the details? 🏡" },
@@ -463,7 +464,8 @@ const safeDB = (db) => __spreadProps(__spreadValues(__spreadValues({}, DEFAULT_D
   propertyTypes: Array.isArray(db == null ? void 0 : db.propertyTypes) ? db.propertyTypes : DEFAULT_DB.propertyTypes,
   enquiryTypes: Array.isArray(db == null ? void 0 : db.enquiryTypes) ? db.enquiryTypes : DEFAULT_DB.enquiryTypes,
   followupTypes: Array.isArray(db == null ? void 0 : db.followupTypes) ? db.followupTypes : DEFAULT_DB.followupTypes,
-  waTemplates: Array.isArray(db == null ? void 0 : db.waTemplates) ? db.waTemplates : DEFAULT_DB.waTemplates
+  waTemplates: Array.isArray(db == null ? void 0 : db.waTemplates) ? db.waTemplates : DEFAULT_DB.waTemplates,
+  targets: (db && db.targets && typeof db.targets === "object") ? db.targets : DEFAULT_DB.targets
 });
 const getAgentKey = () => {
   var _a;
@@ -537,7 +539,13 @@ const loadDBFromFirestore = async (mobile) => {
   return null;
 };
 // Data is managed in localStorage; Drive backup is handled separately
-const DAILY_TARGETS = { calls: 50, followups: 10, newLeads: 5 };
+const DEFAULT_TARGETS = { calls: 50, followups: 10, newLeads: 5 };
+const DAILY_TARGETS = DEFAULT_TARGETS; // legacy ref
+const getTargets = (db) => ({
+  calls:     (db && db.targets && db.targets.calls     > 0) ? db.targets.calls     : DEFAULT_TARGETS.calls,
+  followups: (db && db.targets && db.targets.followups > 0) ? db.targets.followups : DEFAULT_TARGETS.followups,
+  newLeads:  (db && db.targets && db.targets.newLeads  > 0) ? db.targets.newLeads  : DEFAULT_TARGETS.newLeads,
+});
 const SCORE_WEIGHTS = { calls: 1, followups: 3, newLeads: 4 };
 const STREAK_TARGET = 70;
 const ALL_BADGES = [
@@ -1967,14 +1975,14 @@ function App() {
             time: "Tip"
           });
         }
-        if (now2.getHours() >= 18 && doneTodayCount < DAILY_TARGETS.followups) {
+        if (now2.getHours() >= 18 && doneTodayCount < getTargets(db).followups) {
           notifs.push({
             id: "evening_nudge",
             type: "nudge",
             priority: "medium",
             icon: "🌆",
             title: "Evening Check-in",
-            message: `${DAILY_TARGETS.followups - doneTodayCount} follow-ups still pending today. Finish strong!`,
+            message: `${getTargets(db).followups - doneTodayCount} follow-ups still pending today. Finish strong!`,
             color: "#F6AD55",
             action: 4,
             // Score tab
@@ -3296,6 +3304,7 @@ function WATemplateManager({ db, updateDB, showToast }) {
 
 function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced, onLogout, session, theme, toggleTheme }) {
   var _a, _b;
+  const ce = React.createElement;
   const [cloudStatus, setCloudStatus] = React.useState("idle");
   const [showChangePin, setShowChangePin] = React.useState(false);
   const [oldPin, setOldPin]   = React.useState("");
@@ -3303,6 +3312,70 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
   const [newPinB, setNewPinB] = React.useState("");
   const [pinMsg, setPinMsg]   = React.useState("");
   const [pinSaving, setPinSaving] = React.useState(false);
+
+  // Daily Targets — read from db, fall back to defaults
+  const T = getTargets(db);
+  const [tCalls, setTCalls]   = React.useState(String(T.calls));
+  const [tFU, setTFU]         = React.useState(String(T.followups));
+  const [tLeads, setTLeads]   = React.useState(String(T.newLeads));
+  const [targetSaved, setTargetSaved] = React.useState(false);
+
+  const saveTargets = () => {
+    const calls     = parseInt(tCalls)  || DEFAULT_TARGETS.calls;
+    const followups = parseInt(tFU)     || DEFAULT_TARGETS.followups;
+    const newLeads  = parseInt(tLeads)  || DEFAULT_TARGETS.newLeads;
+    updateDB({ ...db, targets: { calls, followups, newLeads } });
+    setTargetSaved(true);
+    showToast("Daily targets saved \u2705");
+    setTimeout(() => setTargetSaved(false), 2500);
+  };
+
+  // Dropdown list editors — add / remove items from db arrays
+  const addItem = (field, val) => {
+    const arr = [...(db[field] || [])];
+    if (!val.trim() || arr.includes(val.trim())) return;
+    updateDB({ ...db, [field]: [...arr, val.trim()] });
+  };
+  const removeItem = (field, idx) => {
+    const arr = [...(db[field] || [])];
+    arr.splice(idx, 1);
+    updateDB({ ...db, [field]: arr });
+  };
+
+  // Inner component for each editable list
+  function ListEditor({ label, field, icon }) {
+    const [input, setInput] = React.useState("");
+    const items = db[field] || [];
+    return ce("div", { className: "card", style: { marginBottom: 14 } },
+      ce("div", { className: "section-title" }, icon + "\u00A0\u00A0" + label),
+      ce("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 } },
+        items.length === 0
+          ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic" } }, "No options yet — add one below")
+          : items.map((item, i) =>
+              ce("div", { key: i, style: { display: "flex", alignItems: "center", gap: 6, background: "var(--bg3)", border: "1px solid var(--card-border)", borderRadius: 99, padding: "5px 8px 5px 12px" } },
+                ce("span", { style: { fontSize: 13, color: "var(--text2)" } }, item),
+                ce("button", {
+                  onClick: () => removeItem(field, i),
+                  style: { background: "rgba(252,129,74,0.15)", border: "none", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#FC814A", fontSize: 13, lineHeight: 1, flexShrink: 0, padding: 0 }
+                }, "\u00D7")
+              )
+            )
+      ),
+      ce("div", { style: { display: "flex", gap: 8 } },
+        ce("input", {
+          type: "text", value: input,
+          placeholder: "Add new\u2026",
+          onChange: (e) => setInput(e.target.value),
+          onKeyDown: (e) => { if (e.key === "Enter" && input.trim()) { addItem(field, input); setInput(""); } },
+          className: "input-field", style: { flex: 1 }
+        }),
+        ce("button", {
+          onClick: () => { if (input.trim()) { addItem(field, input); setInput(""); } },
+          style: { padding: "0 18px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", color: "#fff", fontWeight: 800, fontSize: 18, cursor: "pointer", lineHeight: 1 }
+        }, "+")
+      )
+    );
+  }
 
   const doManualCloudSync = async () => {
     setCloudStatus("syncing");
@@ -3349,14 +3422,53 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     setPinSaving(false);
   };
 
-  const ce = React.createElement;
-  return ce("div", { style: { padding: "0 16px 16px" }, className: "slide-up" },
+  return ce("div", { style: { padding: "0 16px 80px" }, className: "slide-up" },
+
+    // ── Header ──
     ce("div", { style: { padding: "20px 0 16px" } },
-      ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 24, color: "var(--text)" } }, "\u2699\uFE0F ", ce("span", { style: { color: "#B794F6" } }, "Settings")),
-      ce("div", { style: { fontSize: 13, color: "var(--text3)", marginTop: 2 } }, "Account & data settings")
+      ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 24, color: "var(--text)" } },
+        "\u2699\uFE0F\u00A0", ce("span", { style: { color: "#B794F6" } }, "Settings")
+      ),
+      ce("div", { style: { fontSize: 13, color: "var(--text3)", marginTop: 2 } }, "Targets, dropdown options & account settings")
     ),
+
+    // ── DAILY TARGETS ──
+    ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(183,148,246,0.25)", background: "rgba(183,148,246,0.04)" } },
+      ce("div", { className: "section-title" }, "\uD83C\uDFAF\u00A0\u00A0Daily Targets"),
+      ce("div", { style: { fontSize: 12, color: "var(--text3)", marginBottom: 14, lineHeight: 1.6 } },
+        "Set your personal daily goals. Progress bars and score update to match."
+      ),
+      ce("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 } },
+        [
+          { label: "\uD83D\uDCDE Calls",       val: tCalls,  set: setTCalls,  color: "#63B3ED", ph: "50" },
+          { label: "\u2705 Follow-ups",         val: tFU,     set: setTFU,     color: "#68D391", ph: "10" },
+          { label: "\uD83C\uDD95 New Leads",    val: tLeads,  set: setTLeads,  color: "#B794F6", ph: "5"  },
+        ].map((item, i) =>
+          ce("div", { key: i, style: { background: "var(--bg3)", borderRadius: 14, padding: "12px 8px", textAlign: "center", border: "1px solid var(--card-border)" } },
+            ce("div", { style: { fontSize: 11, fontWeight: 700, color: item.color, marginBottom: 8, letterSpacing: 0.3 } }, item.label),
+            ce("input", {
+              type: "tel", inputMode: "numeric", value: item.val, placeholder: item.ph,
+              onChange: (e) => item.set(e.target.value.replace(/\D/g, "")),
+              style: { width: "100%", background: "var(--input-bg)", border: "1px solid var(--input-border)", borderRadius: 10, padding: "8px 4px", fontSize: 24, fontWeight: 800, color: item.color, textAlign: "center", outline: "none" }
+            })
+          )
+        )
+      ),
+      ce("button", {
+        onClick: saveTargets,
+        className: "btn-primary",
+        style: { background: targetSaved ? "linear-gradient(135deg,#68D391,#2F855A)" : "linear-gradient(135deg,#B794F6,#7C5CBF)" }
+      }, targetSaved ? "\u2705  Targets Saved!" : "\uD83C\uDFAF  Save Targets")
+    ),
+
+    // ── DROPDOWN EDITORS ──
+    ce(ListEditor, { label: "Property Types",  field: "propertyTypes",  icon: "\uD83C\uDFE0" }),
+    ce(ListEditor, { label: "Enquiry Types",   field: "enquiryTypes",   icon: "\uD83D\uDD25" }),
+    ce(ListEditor, { label: "Follow-up Types", field: "followupTypes",  icon: "\uD83D\uDCCB" }),
+
+    // ── CLOUD SYNC ──
     ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, "\u2601\uFE0F  Cloud Sync (Firebase)"),
+      ce("div", { className: "section-title" }, "\u2601\uFE0F\u00A0\u00A0Cloud Sync (Firebase)"),
       ce("div", { style: { background: "rgba(104,211,145,0.08)", border: "1px solid rgba(104,211,145,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10 } },
         ce("div", { style: { fontSize: 20 } }, "\uD83D\uDFE2"),
         ce("div", { style: { flex: 1 } },
@@ -3373,8 +3485,10 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
         "\u2713 Works across multiple devices with the same login"
       )
     ),
+
+    // ── EXPORT CSV ──
     ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, "\uD83D\uDCE5  Export as CSV"),
+      ce("div", { className: "section-title" }, "\uD83D\uDCE5\u00A0\u00A0Export as CSV"),
       ce("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
         ["customers", "followups", "projects"].map((t) =>
           ce("button", { key: t, onClick: () => exportCSV(t),
@@ -3386,6 +3500,8 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
         )
       )
     ),
+
+    // ── ACCOUNT ──
     ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(252,129,74,0.2)", background: "rgba(252,129,74,0.04)" } },
       ce("div", { className: "section-title" }, "Account"),
       ce("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -3397,7 +3513,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ),
       ce("button", { onClick: () => setShowChangePin(true),
         style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px", borderRadius: 12, border: "1px solid rgba(183,148,246,0.3)", background: "rgba(183,148,246,0.08)", color: "#B794F6", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 8 }
-      }, "\uD83D\uDD10  Change PIN"),
+      }, "\uD83D\uDD10\u00A0 Change PIN"),
       ce("button", { onClick: onLogout,
         style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px", borderRadius: 12, border: "1px solid rgba(252,129,74,0.3)", background: "rgba(252,129,74,0.08)", color: "#FC814A", fontSize: 13, fontWeight: 600, cursor: "pointer" }
       }, "\uD83D\uDEAA Sign Out"),
@@ -3421,12 +3537,14 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
         )
       )
     ),
+
+    // ── DB STATS ──
     ce("div", { className: "card" },
       ce("div", { className: "section-title" }, "Database Stats"),
       [
-        { label: "Customers", val: (db.customers || []).length, color: "#B794F6" },
-        { label: "Follow-ups", val: (db.followups || []).length, color: "#63B3ED" },
-        { label: "Projects", val: (db.projects || []).length, color: "#68D391" },
+        { label: "Customers",  val: (db.customers  || []).length, color: "#B794F6" },
+        { label: "Follow-ups", val: (db.followups  || []).length, color: "#63B3ED" },
+        { label: "Projects",   val: (db.projects   || []).length, color: "#68D391" },
       ].map(({ label, val, color }) =>
         ce("div", { key: label, style: { display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" } },
           ce("span", { style: { fontSize: 13, color: "var(--text3)" } }, label),
@@ -3455,9 +3573,10 @@ function DailyScoreCard({ perf, db, logCall, setTab }) {
   const score = calcDailyScore(todayCalls, todayFUDone, todayLeads);
   const scoreColor = getScoreColor(score);
   const scoreLabel = getScoreLabel(score);
-  const callPct = Math.min(todayCalls / DAILY_TARGETS.calls * 100, 100);
-  const fuPct = Math.min(todayFUDone / DAILY_TARGETS.followups * 100, 100);
-  const leadPct = Math.min(todayLeads / DAILY_TARGETS.newLeads * 100, 100);
+  const _T = getTargets(db);
+  const callPct = Math.min(todayCalls / _T.calls * 100, 100);
+  const fuPct = Math.min(todayFUDone / _T.followups * 100, 100);
+  const leadPct = Math.min(todayLeads / _T.newLeads * 100, 100);
   const R = 52, C = 2 * Math.PI * R;
   const dash = (C * score / 100).toFixed(1);
   return /* @__PURE__ */ React.createElement("div", { style: { background: "var(--card-bg)", border: "1px solid var(--input-border)", borderRadius: 20, padding: "16px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative", width: 120, height: 120, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("svg", { width: "120", height: "120", style: { transform: "rotate(-90deg)" } }, /* @__PURE__ */ React.createElement("circle", { cx: "60", cy: "60", r: R, fill: "none", stroke: "rgba(255,255,255,0.06)", strokeWidth: "10" }), /* @__PURE__ */ React.createElement(
@@ -3474,9 +3593,9 @@ function DailyScoreCard({ perf, db, logCall, setTab }) {
       style: { transition: "stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1), stroke 0.4s" }
     }
   )), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 30, fontWeight: 800, color: scoreColor, lineHeight: 1 } }, score), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--text3)", fontWeight: 600, letterSpacing: 0.5 } }, "TODAY"))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: scoreColor, marginBottom: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, scoreLabel), [
-    { label: "📞 Calls", val: todayCalls, target: DAILY_TARGETS.calls, pct: callPct, color: "#63B3ED" },
-    { label: "\u2705 Follow-ups", val: todayFUDone, target: DAILY_TARGETS.followups, pct: fuPct, color: "#68D391" },
-    { label: "🆕 New Leads", val: todayLeads, target: DAILY_TARGETS.newLeads, pct: leadPct, color: "#B794F6" }
+    { label: "📞 Calls", val: todayCalls, target: _T.calls, pct: callPct, color: "#63B3ED" },
+    { label: "\u2705 Follow-ups", val: todayFUDone, target: _T.followups, pct: fuPct, color: "#68D391" },
+    { label: "🆕 New Leads", val: todayLeads, target: _T.newLeads, pct: leadPct, color: "#B794F6" }
   ].map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { marginBottom: 7 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "rgba(255,255,255,0.55)", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "65%" } }, item.label), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: item.color, fontWeight: 700 } }, item.val, "/", item.target)), /* @__PURE__ */ React.createElement("div", { style: { height: 5, background: "var(--hover)", borderRadius: 99, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { height: "100%", width: `${item.pct}%`, background: item.color, borderRadius: 99, transition: "width 0.6s ease" } })))))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: logCall, style: { flex: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "11px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#63B3ED,#2B6CB0)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" } }, Icon.phone2, " Log a Call (+1)"), /* @__PURE__ */ React.createElement("button", { onClick: () => setTab(4), style: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "11px", borderRadius: 12, border: "1px solid rgba(183,148,246,0.3)", background: "rgba(183,148,246,0.08)", color: "#B794F6", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, Icon.trophy, " Full Stats")));
 }
 function ScoreBoard({ db, perf, logCall, session, showToast }) {
@@ -3524,9 +3643,9 @@ function ScoreBoard({ db, perf, logCall, session, showToast }) {
       style: { transition: "stroke-dasharray 1s cubic-bezier(0.4,0,0.2,1), stroke 0.4s", filter: `drop-shadow(0 0 8px ${scoreColor})` }
     }
   )), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, fontWeight: 800, color: scoreColor, lineHeight: 1 } }, todayScore), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text3)", fontWeight: 600, letterSpacing: 1 } }, "OUT OF 100"))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: scoreColor, marginBottom: 8 } }, getScoreLabel(todayScore)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 } }, [
-    { emoji: "📞", label: "Calls", val: todayCalls, target: DAILY_TARGETS.calls, color: "#63B3ED" },
-    { emoji: "\u2705", label: "Follow-ups", val: todayFUDone, target: DAILY_TARGETS.followups, color: "#68D391" },
-    { emoji: "🆕", label: "New Leads", val: todayLeads, target: DAILY_TARGETS.newLeads, color: "#B794F6" }
+    { emoji: "📞", label: "Calls", val: todayCalls, target: getTargets(db).calls, color: "#63B3ED" },
+    { emoji: "\u2705", label: "Follow-ups", val: todayFUDone, target: getTargets(db).followups, color: "#68D391" },
+    { emoji: "🆕", label: "New Leads", val: todayLeads, target: getTargets(db).newLeads, color: "#B794F6" }
   ].map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { background: "var(--card-bg)", borderRadius: 12, padding: "10px 6px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, marginBottom: 4 } }, item.emoji), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: item.color } }, item.val), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--text3)", fontWeight: 600 } }, "of ", item.target)))), /* @__PURE__ */ React.createElement("button", { onClick: logCall, style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "13px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#63B3ED,#2B6CB0)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" } }, Icon.phone2, " Log a Call  \xB7  Today: ", todayCalls)), /* @__PURE__ */ React.createElement("div", { className: "card", style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "7-Day Performance"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end", height: 80, marginBottom: 10 } }, last7.map((d, i) => {
     const h = Math.max(d.score / 100 * 72, d.score > 0 ? 4 : 0);
     const col = getScoreColor(d.score);
