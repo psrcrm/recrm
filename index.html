@@ -540,7 +540,7 @@ const loadDBFromFirestore = async (mobile) => {
 };
 // Data is managed in localStorage; Drive backup is handled separately
 const DEFAULT_TARGETS = { calls: 50, followups: 10, newLeads: 5 };
-const DAILY_TARGETS = DEFAULT_TARGETS; // legacy ref
+const DAILY_TARGETS = DEFAULT_TARGETS;
 const getTargets = (db) => ({
   calls:     (db && db.targets && db.targets.calls     > 0) ? db.targets.calls     : DEFAULT_TARGETS.calls,
   followups: (db && db.targets && db.targets.followups > 0) ? db.targets.followups : DEFAULT_TARGETS.followups,
@@ -3313,7 +3313,6 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
   const [pinMsg, setPinMsg]   = React.useState("");
   const [pinSaving, setPinSaving] = React.useState(false);
 
-  // Daily Targets — read from db, fall back to defaults
   const T = getTargets(db);
   const [tCalls, setTCalls]   = React.useState(String(T.calls));
   const [tFU, setTFU]         = React.useState(String(T.followups));
@@ -3330,19 +3329,17 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     setTimeout(() => setTargetSaved(false), 2500);
   };
 
-  // Dropdown list editors — add / remove items from db arrays
+  // Simple string-list editor (propertyTypes, enquiryTypes, followupTypes)
   const addItem = (field, val) => {
     const arr = [...(db[field] || [])];
     if (!val.trim() || arr.includes(val.trim())) return;
     updateDB({ ...db, [field]: [...arr, val.trim()] });
   };
   const removeItem = (field, idx) => {
-    const arr = [...(db[field] || [])];
-    arr.splice(idx, 1);
+    const arr = [...(db[field] || [])]; arr.splice(idx, 1);
     updateDB({ ...db, [field]: arr });
   };
 
-  // Inner component for each editable list
   function ListEditor({ label, field, icon }) {
     const [input, setInput] = React.useState("");
     const items = db[field] || [];
@@ -3350,29 +3347,96 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ce("div", { className: "section-title" }, icon + "\u00A0\u00A0" + label),
       ce("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 } },
         items.length === 0
-          ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic" } }, "No options yet — add one below")
+          ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic" } }, "No options yet")
           : items.map((item, i) =>
               ce("div", { key: i, style: { display: "flex", alignItems: "center", gap: 6, background: "var(--bg3)", border: "1px solid var(--card-border)", borderRadius: 99, padding: "5px 8px 5px 12px" } },
                 ce("span", { style: { fontSize: 13, color: "var(--text2)" } }, item),
                 ce("button", {
                   onClick: () => removeItem(field, i),
-                  style: { background: "rgba(252,129,74,0.15)", border: "none", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#FC814A", fontSize: 13, lineHeight: 1, flexShrink: 0, padding: 0 }
+                  style: { background: "rgba(252,129,74,0.15)", border: "none", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#FC814A", fontSize: 13, padding: 0 }
                 }, "\u00D7")
               )
             )
       ),
       ce("div", { style: { display: "flex", gap: 8 } },
         ce("input", {
-          type: "text", value: input,
-          placeholder: "Add new\u2026",
+          type: "text", value: input, placeholder: "Add new\u2026",
           onChange: (e) => setInput(e.target.value),
           onKeyDown: (e) => { if (e.key === "Enter" && input.trim()) { addItem(field, input); setInput(""); } },
           className: "input-field", style: { flex: 1 }
         }),
         ce("button", {
           onClick: () => { if (input.trim()) { addItem(field, input); setInput(""); } },
-          style: { padding: "0 18px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", color: "#fff", fontWeight: 800, fontSize: 18, cursor: "pointer", lineHeight: 1 }
+          style: { padding: "0 18px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", color: "#fff", fontWeight: 800, fontSize: 18, cursor: "pointer" }
         }, "+")
+      )
+    );
+  }
+
+  // Projects / Products editor (objects with name + type)
+  function ProjectsEditor() {
+    const projects  = db.projects || [];
+    const propTypes = db.propertyTypes || ["Plot","Flat","Villa","Farmland","Commercial"];
+    const [pName, setPName]     = React.useState("");
+    const [pType, setPType]     = React.useState(propTypes[0] || "Plot");
+    const [editIdx, setEditIdx] = React.useState(null);
+    const [editName, setEditName] = React.useState("");
+    const [editType, setEditType] = React.useState("");
+
+    const addProject = () => {
+      if (!pName.trim()) return;
+      updateDB({ ...db, projects: [...projects, { id: "p" + Date.now(), name: pName.trim(), type: pType }] });
+      setPName(""); showToast("Project added \u2705");
+    };
+    const removeProject = (idx) => {
+      const arr = [...projects]; arr.splice(idx, 1);
+      updateDB({ ...db, projects: arr }); showToast("Project removed");
+    };
+    const startEdit = (idx) => { setEditIdx(idx); setEditName(projects[idx].name); setEditType(projects[idx].type); };
+    const saveEdit  = () => {
+      if (!editName.trim()) return;
+      updateDB({ ...db, projects: projects.map((p, i) => i === editIdx ? { ...p, name: editName.trim(), type: editType } : p) });
+      setEditIdx(null); showToast("Project updated \u2705");
+    };
+
+    return ce("div", { className: "card", style: { marginBottom: 14 } },
+      ce("div", { className: "section-title" }, "\uD83C\uDFD7\uFE0F\u00A0\u00A0Projects / Products"),
+      ce("div", { style: { fontSize: 12, color: "var(--text3)", marginBottom: 12, lineHeight: 1.6 } },
+        "These appear in dropdowns when adding leads and follow-ups."
+      ),
+      projects.length === 0
+        ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic", marginBottom: 12 } }, "No projects yet \u2014 add one below")
+        : ce("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } },
+            projects.map((p, i) =>
+              editIdx === i
+                ? ce("div", { key: p.id, style: { background: "rgba(183,148,246,0.06)", border: "1px solid rgba(183,148,246,0.3)", borderRadius: 14, padding: 12 } },
+                    ce("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+                      ce("input", { type: "text", value: editName, className: "input-field", style: { flex: 2 }, onChange: (e) => setEditName(e.target.value), placeholder: "Project name" }),
+                      ce("select", { value: editType, className: "input-field", style: { flex: 1 }, onChange: (e) => setEditType(e.target.value) },
+                        propTypes.map((t) => ce("option", { key: t, value: t }, t))
+                      )
+                    ),
+                    ce("div", { style: { display: "flex", gap: 8 } },
+                      ce("button", { onClick: saveEdit, className: "btn-primary", style: { flex: 1, padding: "9px", fontSize: 13 } }, "\u2705 Save"),
+                      ce("button", { onClick: () => setEditIdx(null), style: { flex: 1, padding: "9px", borderRadius: 12, border: "1px solid var(--card-border)", background: "var(--bg3)", color: "var(--text3)", fontSize: 13, cursor: "pointer" } }, "Cancel")
+                    )
+                  )
+                : ce("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, background: "var(--bg3)", border: "1px solid var(--card-border)", borderRadius: 14, padding: "10px 12px" } },
+                    ce("div", { style: { flex: 1, minWidth: 0 } },
+                      ce("div", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, p.name),
+                      ce("div", { style: { fontSize: 11, color: "#B794F6", fontWeight: 600, marginTop: 2 } }, p.type)
+                    ),
+                    ce("button", { onClick: () => startEdit(i), style: { background: "rgba(99,179,237,0.12)", border: "1px solid rgba(99,179,237,0.3)", borderRadius: 8, padding: "6px 12px", color: "#63B3ED", fontSize: 13, cursor: "pointer" } }, "\u270F\uFE0F"),
+                    ce("button", { onClick: () => removeProject(i), style: { background: "rgba(252,129,74,0.12)", border: "1px solid rgba(252,129,74,0.3)", borderRadius: 8, padding: "6px 12px", color: "#FC814A", fontSize: 13, cursor: "pointer" } }, "\uD83D\uDDD1\uFE0F")
+                  )
+            )
+          ),
+      ce("div", { style: { display: "flex", gap: 8 } },
+        ce("input", { type: "text", value: pName, className: "input-field", style: { flex: 2 }, placeholder: "Project name\u2026", onChange: (e) => setPName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") addProject(); } }),
+        ce("select", { value: pType, className: "input-field", style: { flex: 1 }, onChange: (e) => setPType(e.target.value) },
+          propTypes.map((t) => ce("option", { key: t, value: t }, t))
+        ),
+        ce("button", { onClick: addProject, style: { padding: "0 16px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#B794F6,#7C5CBF)", color: "#fff", fontWeight: 800, fontSize: 18, cursor: "pointer" } }, "+")
       )
     );
   }
@@ -3424,7 +3488,6 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
 
   return ce("div", { style: { padding: "0 16px 80px" }, className: "slide-up" },
 
-    // ── Header ──
     ce("div", { style: { padding: "20px 0 16px" } },
       ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 24, color: "var(--text)" } },
         "\u2699\uFE0F\u00A0", ce("span", { style: { color: "#B794F6" } }, "Settings")
@@ -3432,7 +3495,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ce("div", { style: { fontSize: 13, color: "var(--text3)", marginTop: 2 } }, "Targets, dropdown options & account settings")
     ),
 
-    // ── DAILY TARGETS ──
+    // Daily Targets
     ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(183,148,246,0.25)", background: "rgba(183,148,246,0.04)" } },
       ce("div", { className: "section-title" }, "\uD83C\uDFAF\u00A0\u00A0Daily Targets"),
       ce("div", { style: { fontSize: 12, color: "var(--text3)", marginBottom: 14, lineHeight: 1.6 } },
@@ -3440,12 +3503,12 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ),
       ce("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 } },
         [
-          { label: "\uD83D\uDCDE Calls",       val: tCalls,  set: setTCalls,  color: "#63B3ED", ph: "50" },
-          { label: "\u2705 Follow-ups",         val: tFU,     set: setTFU,     color: "#68D391", ph: "10" },
-          { label: "\uD83C\uDD95 New Leads",    val: tLeads,  set: setTLeads,  color: "#B794F6", ph: "5"  },
+          { label: "\uD83D\uDCDE Calls",      val: tCalls,  set: setTCalls,  color: "#63B3ED", ph: "50" },
+          { label: "\u2705 Follow-ups",        val: tFU,     set: setTFU,     color: "#68D391", ph: "10" },
+          { label: "\uD83C\uDD95 New Leads",   val: tLeads,  set: setTLeads,  color: "#B794F6", ph: "5"  },
         ].map((item, i) =>
           ce("div", { key: i, style: { background: "var(--bg3)", borderRadius: 14, padding: "12px 8px", textAlign: "center", border: "1px solid var(--card-border)" } },
-            ce("div", { style: { fontSize: 11, fontWeight: 700, color: item.color, marginBottom: 8, letterSpacing: 0.3 } }, item.label),
+            ce("div", { style: { fontSize: 11, fontWeight: 700, color: item.color, marginBottom: 8 } }, item.label),
             ce("input", {
               type: "tel", inputMode: "numeric", value: item.val, placeholder: item.ph,
               onChange: (e) => item.set(e.target.value.replace(/\D/g, "")),
@@ -3455,18 +3518,20 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
         )
       ),
       ce("button", {
-        onClick: saveTargets,
-        className: "btn-primary",
+        onClick: saveTargets, className: "btn-primary",
         style: { background: targetSaved ? "linear-gradient(135deg,#68D391,#2F855A)" : "linear-gradient(135deg,#B794F6,#7C5CBF)" }
       }, targetSaved ? "\u2705  Targets Saved!" : "\uD83C\uDFAF  Save Targets")
     ),
 
-    // ── DROPDOWN EDITORS ──
+    // Dropdown list editors
     ce(ListEditor, { label: "Property Types",  field: "propertyTypes",  icon: "\uD83C\uDFE0" }),
     ce(ListEditor, { label: "Enquiry Types",   field: "enquiryTypes",   icon: "\uD83D\uDD25" }),
     ce(ListEditor, { label: "Follow-up Types", field: "followupTypes",  icon: "\uD83D\uDCCB" }),
 
-    // ── CLOUD SYNC ──
+    // Projects / Products
+    ce(ProjectsEditor, null),
+
+    // Cloud Sync
     ce("div", { className: "card", style: { marginBottom: 14 } },
       ce("div", { className: "section-title" }, "\u2601\uFE0F\u00A0\u00A0Cloud Sync (Firebase)"),
       ce("div", { style: { background: "rgba(104,211,145,0.08)", border: "1px solid rgba(104,211,145,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10 } },
@@ -3486,7 +3551,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       )
     ),
 
-    // ── EXPORT CSV ──
+    // Export CSV
     ce("div", { className: "card", style: { marginBottom: 14 } },
       ce("div", { className: "section-title" }, "\uD83D\uDCE5\u00A0\u00A0Export as CSV"),
       ce("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
@@ -3501,7 +3566,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       )
     ),
 
-    // ── ACCOUNT ──
+    // Account
     ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(252,129,74,0.2)", background: "rgba(252,129,74,0.04)" } },
       ce("div", { className: "section-title" }, "Account"),
       ce("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -3517,7 +3582,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ce("button", { onClick: onLogout,
         style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px", borderRadius: 12, border: "1px solid rgba(252,129,74,0.3)", background: "rgba(252,129,74,0.08)", color: "#FC814A", fontSize: 13, fontWeight: 600, cursor: "pointer" }
       }, "\uD83D\uDEAA Sign Out"),
-      showChangePin && ce("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }, onClick: () => setShowChangePin(false), className: "fade-in" },
+      showChangePin && ce("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }, onClick: () => setShowChangePin(false) },
         ce("div", { style: { width: "100%", maxWidth: 430, background: "var(--modal-bg)", borderRadius: "20px 20px 0 0", padding: "24px 20px 36px", border: "1px solid rgba(255,255,255,0.1)" }, onClick: (e) => e.stopPropagation() },
           ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 20, color: "var(--text)", marginBottom: 20 } }, "\uD83D\uDD10 Change PIN"),
           ce("div", { style: { marginBottom: 10 } },
@@ -3538,7 +3603,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       )
     ),
 
-    // ── DB STATS ──
+    // DB Stats
     ce("div", { className: "card" },
       ce("div", { className: "section-title" }, "Database Stats"),
       [
@@ -3573,10 +3638,9 @@ function DailyScoreCard({ perf, db, logCall, setTab }) {
   const score = calcDailyScore(todayCalls, todayFUDone, todayLeads);
   const scoreColor = getScoreColor(score);
   const scoreLabel = getScoreLabel(score);
-  const _T = getTargets(db);
-  const callPct = Math.min(todayCalls / _T.calls * 100, 100);
-  const fuPct = Math.min(todayFUDone / _T.followups * 100, 100);
-  const leadPct = Math.min(todayLeads / _T.newLeads * 100, 100);
+  const callPct = Math.min(todayCalls / getTargets(db).calls * 100, 100);
+  const fuPct = Math.min(todayFUDone / getTargets(db).followups * 100, 100);
+  const leadPct = Math.min(todayLeads / getTargets(db).newLeads * 100, 100);
   const R = 52, C = 2 * Math.PI * R;
   const dash = (C * score / 100).toFixed(1);
   return /* @__PURE__ */ React.createElement("div", { style: { background: "var(--card-bg)", border: "1px solid var(--input-border)", borderRadius: 20, padding: "16px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative", width: 120, height: 120, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("svg", { width: "120", height: "120", style: { transform: "rotate(-90deg)" } }, /* @__PURE__ */ React.createElement("circle", { cx: "60", cy: "60", r: R, fill: "none", stroke: "rgba(255,255,255,0.06)", strokeWidth: "10" }), /* @__PURE__ */ React.createElement(
@@ -3593,9 +3657,9 @@ function DailyScoreCard({ perf, db, logCall, setTab }) {
       style: { transition: "stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1), stroke 0.4s" }
     }
   )), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 30, fontWeight: 800, color: scoreColor, lineHeight: 1 } }, score), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "var(--text3)", fontWeight: 600, letterSpacing: 0.5 } }, "TODAY"))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: scoreColor, marginBottom: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, scoreLabel), [
-    { label: "📞 Calls", val: todayCalls, target: _T.calls, pct: callPct, color: "#63B3ED" },
-    { label: "\u2705 Follow-ups", val: todayFUDone, target: _T.followups, pct: fuPct, color: "#68D391" },
-    { label: "🆕 New Leads", val: todayLeads, target: _T.newLeads, pct: leadPct, color: "#B794F6" }
+    { label: "📞 Calls", val: todayCalls, target: getTargets(db).calls, pct: callPct, color: "#63B3ED" },
+    { label: "\u2705 Follow-ups", val: todayFUDone, target: getTargets(db).followups, pct: fuPct, color: "#68D391" },
+    { label: "🆕 New Leads", val: todayLeads, target: getTargets(db).newLeads, pct: leadPct, color: "#B794F6" }
   ].map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { marginBottom: 7 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "rgba(255,255,255,0.55)", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "65%" } }, item.label), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: item.color, fontWeight: 700 } }, item.val, "/", item.target)), /* @__PURE__ */ React.createElement("div", { style: { height: 5, background: "var(--hover)", borderRadius: 99, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { height: "100%", width: `${item.pct}%`, background: item.color, borderRadius: 99, transition: "width 0.6s ease" } })))))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: logCall, style: { flex: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "11px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#63B3ED,#2B6CB0)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" } }, Icon.phone2, " Log a Call (+1)"), /* @__PURE__ */ React.createElement("button", { onClick: () => setTab(4), style: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "11px", borderRadius: 12, border: "1px solid rgba(183,148,246,0.3)", background: "rgba(183,148,246,0.08)", color: "#B794F6", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, Icon.trophy, " Full Stats")));
 }
 function ScoreBoard({ db, perf, logCall, session, showToast }) {
