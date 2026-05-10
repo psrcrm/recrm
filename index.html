@@ -3323,28 +3323,34 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     const calls     = parseInt(tCalls)  || DEFAULT_TARGETS.calls;
     const followups = parseInt(tFU)     || DEFAULT_TARGETS.followups;
     const newLeads  = parseInt(tLeads)  || DEFAULT_TARGETS.newLeads;
-    updateDB({ ...db, targets: { calls, followups, newLeads } });
+    updateDB(prev => ({ ...prev, targets: { calls, followups, newLeads } }));
     setTargetSaved(true);
-    showToast("Daily targets saved \u2705");
+    showToast("Daily targets saved ✅");
     setTimeout(() => setTargetSaved(false), 2500);
   };
 
-  // Simple string-list editor (propertyTypes, enquiryTypes, followupTypes)
+  // Simple string-list editor
   const addItem = (field, val) => {
-    const arr = [...(db[field] || [])];
-    if (!val.trim() || arr.includes(val.trim())) return;
-    updateDB({ ...db, [field]: [...arr, val.trim()] });
+    if (!val.trim()) return;
+    updateDB(prev => {
+      const arr = [...(prev[field] || [])];
+      if (arr.includes(val.trim())) return prev;
+      return { ...prev, [field]: [...arr, val.trim()] };
+    });
   };
   const removeItem = (field, idx) => {
-    const arr = [...(db[field] || [])]; arr.splice(idx, 1);
-    updateDB({ ...db, [field]: arr });
+    updateDB(prev => {
+      const arr = [...(prev[field] || [])];
+      arr.splice(idx, 1);
+      return { ...prev, [field]: arr };
+    });
   };
 
   function ListEditor({ label, field, icon }) {
     const [input, setInput] = React.useState("");
     const items = db[field] || [];
     return ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, icon + "\u00A0\u00A0" + label),
+      ce("div", { className: "section-title" }, icon + "  " + label),
       ce("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 } },
         items.length === 0
           ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic" } }, "No options yet")
@@ -3354,13 +3360,13 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
                 ce("button", {
                   onClick: () => removeItem(field, i),
                   style: { background: "rgba(252,129,74,0.15)", border: "none", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#FC814A", fontSize: 13, padding: 0 }
-                }, "\u00D7")
+                }, "×")
               )
             )
       ),
       ce("div", { style: { display: "flex", gap: 8 } },
         ce("input", {
-          type: "text", value: input, placeholder: "Add new\u2026",
+          type: "text", value: input, placeholder: "Add new…",
           onChange: (e) => setInput(e.target.value),
           onKeyDown: (e) => { if (e.key === "Enter" && input.trim()) { addItem(field, input); setInput(""); } },
           className: "input-field", style: { flex: 1 }
@@ -3373,39 +3379,55 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     );
   }
 
-  // Projects / Products editor (objects with name + type)
+  // Projects / Products editor
   function ProjectsEditor() {
     const projects  = db.projects || [];
     const propTypes = db.propertyTypes || ["Plot","Flat","Villa","Farmland","Commercial"];
-    const [pName, setPName]     = React.useState("");
-    const [pType, setPType]     = React.useState(propTypes[0] || "Plot");
-    const [editIdx, setEditIdx] = React.useState(null);
+    const [pName, setPName]       = React.useState("");
+    const [pType, setPType]       = React.useState(propTypes[0] || "Plot");
+    const [editIdx, setEditIdx]   = React.useState(null);
     const [editName, setEditName] = React.useState("");
     const [editType, setEditType] = React.useState("");
 
     const addProject = () => {
       if (!pName.trim()) return;
-      updateDB({ ...db, projects: [...projects, { id: "p" + Date.now(), name: pName.trim(), type: pType }] });
-      setPName(""); showToast("Project added \u2705");
+      const newProj = { id: "p" + Date.now(), name: pName.trim(), type: pType };
+      updateDB(prev => ({ ...prev, projects: [...(prev.projects || []), newProj] }));
+      setPName("");
+      showToast("Project added ✅");
     };
     const removeProject = (idx) => {
-      const arr = [...projects]; arr.splice(idx, 1);
-      updateDB({ ...db, projects: arr }); showToast("Project removed");
+      updateDB(prev => {
+        const arr = [...(prev.projects || [])];
+        arr.splice(idx, 1);
+        return { ...prev, projects: arr };
+      });
+      showToast("Project removed");
     };
-    const startEdit = (idx) => { setEditIdx(idx); setEditName(projects[idx].name); setEditType(projects[idx].type); };
-    const saveEdit  = () => {
+    const startEdit = (idx) => {
+      setEditIdx(idx);
+      setEditName(projects[idx].name);
+      setEditType(projects[idx].type);
+    };
+    const saveEdit = () => {
       if (!editName.trim()) return;
-      updateDB({ ...db, projects: projects.map((p, i) => i === editIdx ? { ...p, name: editName.trim(), type: editType } : p) });
-      setEditIdx(null); showToast("Project updated \u2705");
+      updateDB(prev => ({
+        ...prev,
+        projects: (prev.projects || []).map((p, i) =>
+          i === editIdx ? { ...p, name: editName.trim(), type: editType } : p
+        )
+      }));
+      setEditIdx(null);
+      showToast("Project updated ✅");
     };
 
     return ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, "\uD83C\uDFD7\uFE0F\u00A0\u00A0Projects / Products"),
+      ce("div", { className: "section-title" }, "??️  Projects / Products"),
       ce("div", { style: { fontSize: 12, color: "var(--text3)", marginBottom: 12, lineHeight: 1.6 } },
         "These appear in dropdowns when adding leads and follow-ups."
       ),
       projects.length === 0
-        ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic", marginBottom: 12 } }, "No projects yet \u2014 add one below")
+        ? ce("div", { style: { fontSize: 12, color: "var(--text3)", fontStyle: "italic", marginBottom: 12 } }, "No projects yet — add one below")
         : ce("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } },
             projects.map((p, i) =>
               editIdx === i
@@ -3417,7 +3439,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
                       )
                     ),
                     ce("div", { style: { display: "flex", gap: 8 } },
-                      ce("button", { onClick: saveEdit, className: "btn-primary", style: { flex: 1, padding: "9px", fontSize: 13 } }, "\u2705 Save"),
+                      ce("button", { onClick: saveEdit, className: "btn-primary", style: { flex: 1, padding: "9px", fontSize: 13 } }, "✅ Save"),
                       ce("button", { onClick: () => setEditIdx(null), style: { flex: 1, padding: "9px", borderRadius: 12, border: "1px solid var(--card-border)", background: "var(--bg3)", color: "var(--text3)", fontSize: 13, cursor: "pointer" } }, "Cancel")
                     )
                   )
@@ -3426,13 +3448,13 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
                       ce("div", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, p.name),
                       ce("div", { style: { fontSize: 11, color: "#B794F6", fontWeight: 600, marginTop: 2 } }, p.type)
                     ),
-                    ce("button", { onClick: () => startEdit(i), style: { background: "rgba(99,179,237,0.12)", border: "1px solid rgba(99,179,237,0.3)", borderRadius: 8, padding: "6px 12px", color: "#63B3ED", fontSize: 13, cursor: "pointer" } }, "\u270F\uFE0F"),
-                    ce("button", { onClick: () => removeProject(i), style: { background: "rgba(252,129,74,0.12)", border: "1px solid rgba(252,129,74,0.3)", borderRadius: 8, padding: "6px 12px", color: "#FC814A", fontSize: 13, cursor: "pointer" } }, "\uD83D\uDDD1\uFE0F")
+                    ce("button", { onClick: () => startEdit(i), style: { background: "rgba(99,179,237,0.12)", border: "1px solid rgba(99,179,237,0.3)", borderRadius: 8, padding: "6px 12px", color: "#63B3ED", fontSize: 13, cursor: "pointer" } }, "✏️"),
+                    ce("button", { onClick: () => removeProject(i), style: { background: "rgba(252,129,74,0.12)", border: "1px solid rgba(252,129,74,0.3)", borderRadius: 8, padding: "6px 12px", color: "#FC814A", fontSize: 13, cursor: "pointer" } }, "??️")
                   )
             )
           ),
       ce("div", { style: { display: "flex", gap: 8 } },
-        ce("input", { type: "text", value: pName, className: "input-field", style: { flex: 2 }, placeholder: "Project name\u2026", onChange: (e) => setPName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") addProject(); } }),
+        ce("input", { type: "text", value: pName, className: "input-field", style: { flex: 2 }, placeholder: "Project name…", onChange: (e) => setPName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") addProject(); } }),
         ce("select", { value: pType, className: "input-field", style: { flex: 1 }, onChange: (e) => setPType(e.target.value) },
           propTypes.map((t) => ce("option", { key: t, value: t }, t))
         ),
@@ -3448,7 +3470,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       if (!ref) throw new Error("Not logged in");
       await ref.set({ crm_data: db, updatedAt: new Date().toISOString() }, { merge: true });
       setCloudStatus("done");
-      showToast("Synced to cloud \u2705");
+      showToast("Synced to cloud ✅");
       setTimeout(() => setCloudStatus("idle"), 3000);
     } catch(e) {
       setCloudStatus("error");
@@ -3466,7 +3488,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     a.download = table + "_" + new Date().toISOString().slice(0,10) + ".csv";
     a.click();
-    showToast(table + " exported \u2705");
+    showToast(table + " exported ✅");
   };
 
   const doChangePin = async () => {
@@ -3477,7 +3499,7 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
     setPinSaving(true); setPinMsg("");
     try {
       await changePinApi({ oldPin, newPin: newPinA });
-      showToast("PIN changed \u2705");
+      showToast("PIN changed ✅");
       setShowChangePin(false);
       setOldPin(""); setNewPinA(""); setNewPinB("");
     } catch(e) {
@@ -3490,22 +3512,21 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
 
     ce("div", { style: { padding: "20px 0 16px" } },
       ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 24, color: "var(--text)" } },
-        "\u2699\uFE0F\u00A0", ce("span", { style: { color: "#B794F6" } }, "Settings")
+        "⚙️ ", ce("span", { style: { color: "#B794F6" } }, "Settings")
       ),
       ce("div", { style: { fontSize: 13, color: "var(--text3)", marginTop: 2 } }, "Targets, dropdown options & account settings")
     ),
 
-    // Daily Targets
     ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(183,148,246,0.25)", background: "rgba(183,148,246,0.04)" } },
-      ce("div", { className: "section-title" }, "\uD83C\uDFAF\u00A0\u00A0Daily Targets"),
+      ce("div", { className: "section-title" }, "??  Daily Targets"),
       ce("div", { style: { fontSize: 12, color: "var(--text3)", marginBottom: 14, lineHeight: 1.6 } },
         "Set your personal daily goals. Progress bars and score update to match."
       ),
       ce("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 } },
         [
-          { label: "\uD83D\uDCDE Calls",      val: tCalls,  set: setTCalls,  color: "#63B3ED", ph: "50" },
-          { label: "\u2705 Follow-ups",        val: tFU,     set: setTFU,     color: "#68D391", ph: "10" },
-          { label: "\uD83C\uDD95 New Leads",   val: tLeads,  set: setTLeads,  color: "#B794F6", ph: "5"  },
+          { label: "?? Calls",     val: tCalls, set: setTCalls, color: "#63B3ED", ph: "50" },
+          { label: "✅ Follow-ups",       val: tFU,    set: setTFU,   color: "#68D391", ph: "10" },
+          { label: "?? New Leads",  val: tLeads, set: setTLeads,color: "#B794F6", ph: "5"  },
         ].map((item, i) =>
           ce("div", { key: i, style: { background: "var(--bg3)", borderRadius: 14, padding: "12px 8px", textAlign: "center", border: "1px solid var(--card-border)" } },
             ce("div", { style: { fontSize: 11, fontWeight: 700, color: item.color, marginBottom: 8 } }, item.label),
@@ -3520,53 +3541,47 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
       ce("button", {
         onClick: saveTargets, className: "btn-primary",
         style: { background: targetSaved ? "linear-gradient(135deg,#68D391,#2F855A)" : "linear-gradient(135deg,#B794F6,#7C5CBF)" }
-      }, targetSaved ? "\u2705  Targets Saved!" : "\uD83C\uDFAF  Save Targets")
+      }, targetSaved ? "✅  Targets Saved!" : "??  Save Targets")
     ),
 
-    // Dropdown list editors
-    ce(ListEditor, { label: "Property Types",  field: "propertyTypes",  icon: "\uD83C\uDFE0" }),
-    ce(ListEditor, { label: "Enquiry Types",   field: "enquiryTypes",   icon: "\uD83D\uDD25" }),
-    ce(ListEditor, { label: "Follow-up Types", field: "followupTypes",  icon: "\uD83D\uDCCB" }),
-
-    // Projects / Products
+    ce(ListEditor, { label: "Property Types",  field: "propertyTypes",  icon: "??" }),
+    ce(ListEditor, { label: "Enquiry Types",   field: "enquiryTypes",   icon: "??" }),
+    ce(ListEditor, { label: "Follow-up Types", field: "followupTypes",  icon: "??" }),
     ce(ProjectsEditor, null),
 
-    // Cloud Sync
     ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, "\u2601\uFE0F\u00A0\u00A0Cloud Sync (Firebase)"),
+      ce("div", { className: "section-title" }, "☁️  Cloud Sync (Firebase)"),
       ce("div", { style: { background: "rgba(104,211,145,0.08)", border: "1px solid rgba(104,211,145,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10 } },
-        ce("div", { style: { fontSize: 20 } }, "\uD83D\uDFE2"),
+        ce("div", { style: { fontSize: 20 } }, "??"),
         ce("div", { style: { flex: 1 } },
           ce("div", { style: { fontWeight: 600, color: "#68D391", fontSize: 13 } }, "Cloud sync active"),
-          ce("div", { style: { fontSize: 11, color: "var(--text3)", marginTop: 2 } }, "Every save goes to cloud \u2014 browser clears won't affect your data")
+          ce("div", { style: { fontSize: 11, color: "var(--text3)", marginTop: 2 } }, "Every save goes to cloud — browser clears won't affect your data")
         )
       ),
       ce("button", { onClick: doManualCloudSync, className: "btn-primary", style: { background: "linear-gradient(135deg,#68D391,#2F855A)", marginBottom: 10 } },
-        cloudStatus === "syncing" ? "\u23F3  Syncing..." : cloudStatus === "done" ? "\u2705  Synced!" : "\u2601\uFE0F  Force Sync Now"
+        cloudStatus === "syncing" ? "⏳  Syncing..." : cloudStatus === "done" ? "✅  Synced!" : "☁️  Force Sync Now"
       ),
       ce("div", { style: { fontSize: 11, color: "var(--text4)", lineHeight: 1.8 } },
-        "\u2713 Data safe even if you clear browser history or uninstall", ce("br"),
-        "\u2713 Login on any new device \u2192 all data restored instantly", ce("br"),
-        "\u2713 Works across multiple devices with the same login"
+        "✓ Data safe even if you clear browser history or uninstall", ce("br"),
+        "✓ Login on any new device → all data restored instantly", ce("br"),
+        "✓ Works across multiple devices with the same login"
       )
     ),
 
-    // Export CSV
     ce("div", { className: "card", style: { marginBottom: 14 } },
-      ce("div", { className: "section-title" }, "\uD83D\uDCE5\u00A0\u00A0Export as CSV"),
+      ce("div", { className: "section-title" }, "??  Export as CSV"),
       ce("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
         ["customers", "followups", "projects"].map((t) =>
           ce("button", { key: t, onClick: () => exportCSV(t),
             style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--card-border)", background: "var(--bg3)", cursor: "pointer", color: "var(--text2)", fontSize: 13 }
           },
             ce("span", null, t.charAt(0).toUpperCase() + t.slice(1)),
-            ce("span", { style: { fontSize: 11, color: "#B794F6", fontWeight: 600 } }, (db[t]||[]).length + " rows \u2193")
+            ce("span", { style: { fontSize: 11, color: "#B794F6", fontWeight: 600 } }, (db[t]||[]).length + " rows ↓")
           )
         )
       )
     ),
 
-    // Account
     ce("div", { className: "card", style: { marginBottom: 14, border: "1px solid rgba(252,129,74,0.2)", background: "rgba(252,129,74,0.04)" } },
       ce("div", { className: "section-title" }, "Account"),
       ce("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -3574,17 +3589,17 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
           ce("div", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)" } }, ((_a = session == null ? void 0 : session.agent) == null ? void 0 : _a.name) || "Agent"),
           ce("div", { style: { fontSize: 11, color: "var(--text3)", marginTop: 2 } }, ((_b = session == null ? void 0 : session.agent) == null ? void 0 : _b.mobile) || "")
         ),
-        ce("span", { style: { fontSize: 18 } }, "\uD83D\uDD10")
+        ce("span", { style: { fontSize: 18 } }, "??")
       ),
       ce("button", { onClick: () => setShowChangePin(true),
         style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px", borderRadius: 12, border: "1px solid rgba(183,148,246,0.3)", background: "rgba(183,148,246,0.08)", color: "#B794F6", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 8 }
-      }, "\uD83D\uDD10\u00A0 Change PIN"),
+      }, "??  Change PIN"),
       ce("button", { onClick: onLogout,
         style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "11px", borderRadius: 12, border: "1px solid rgba(252,129,74,0.3)", background: "rgba(252,129,74,0.08)", color: "#FC814A", fontSize: 13, fontWeight: 600, cursor: "pointer" }
-      }, "\uD83D\uDEAA Sign Out"),
+      }, "?? Sign Out"),
       showChangePin && ce("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }, onClick: () => setShowChangePin(false) },
         ce("div", { style: { width: "100%", maxWidth: 430, background: "var(--modal-bg)", borderRadius: "20px 20px 0 0", padding: "24px 20px 36px", border: "1px solid rgba(255,255,255,0.1)" }, onClick: (e) => e.stopPropagation() },
-          ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 20, color: "var(--text)", marginBottom: 20 } }, "\uD83D\uDD10 Change PIN"),
+          ce("div", { style: { fontFamily: "'DM Serif Display',serif", fontSize: 20, color: "var(--text)", marginBottom: 20 } }, "?? Change PIN"),
           ce("div", { style: { marginBottom: 10 } },
             ce("div", { className: "label" }, "Current PIN"),
             ce("input", { type: "tel", inputMode: "numeric", maxLength: 4, value: oldPin, onChange: (e) => { setOldPin(e.target.value.replace(/\D/g,"")); setPinMsg(""); }, placeholder: "Current 4-digit PIN", className: "input-field" })
@@ -3597,13 +3612,12 @@ function Settings({ db, updateDB, showToast, handleSync, syncStatus, lastSynced,
             ce("div", { className: "label" }, "Confirm New PIN"),
             ce("input", { type: "tel", inputMode: "numeric", maxLength: 4, value: newPinB, onChange: (e) => { setNewPinB(e.target.value.replace(/\D/g,"")); setPinMsg(""); }, placeholder: "Re-enter new PIN", className: "input-field" })
           ),
-          pinMsg && ce("div", { style: { fontSize: 12, color: "#FC814A", marginBottom: 12, background: "rgba(252,129,74,0.1)", border: "1px solid rgba(252,129,74,0.25)", borderRadius: 10, padding: "8px 12px" } }, "\u26A0\uFE0F " + pinMsg),
-          ce("button", { onClick: doChangePin, disabled: pinSaving, className: "btn-primary" }, pinSaving ? "Saving..." : "\uD83D\uDD10 Update PIN")
+          pinMsg && ce("div", { style: { fontSize: 12, color: "#FC814A", marginBottom: 12, background: "rgba(252,129,74,0.1)", border: "1px solid rgba(252,129,74,0.25)", borderRadius: 10, padding: "8px 12px" } }, "⚠️ " + pinMsg),
+          ce("button", { onClick: doChangePin, disabled: pinSaving, className: "btn-primary" }, pinSaving ? "Saving..." : "?? Update PIN")
         )
       )
     ),
 
-    // DB Stats
     ce("div", { className: "card" },
       ce("div", { className: "section-title" }, "Database Stats"),
       [
